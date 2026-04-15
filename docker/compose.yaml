@@ -3,18 +3,18 @@ services:
     build:
       context: ../
       dockerfile: ./docker/Dockerfile
-    container_name: ceramic-backend
+    container_name: scapital-staff-new-backend
     env_file:
-      - ./.env
+      - ../.env
     depends_on:
       redis:
         condition: service_healthy
-      mariadb:
+      mysql:
         condition: service_healthy
     ports:
       - 8000:8000
     networks:
-      - ceramic_network
+      - scapital-staff-new-network
     restart: always
     healthcheck:
       test:
@@ -27,7 +27,7 @@ services:
   redis:
     image: redis:7.0-alpine
     restart: always
-    container_name: ceramic-redis
+    container_name: scapital-staff-new-redis
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
@@ -36,36 +36,33 @@ services:
     volumes:
       - redis_data:/data
     networks:
-      - ceramic_network
+      - scapital-staff-new-network
 
-  mariadb:
-    image: mariadb:latest
+  mysql:
+    image: mysql:8.0
     restart: always
-    container_name: ceramic-db
+    container_name: scapital-staff-new-db
     env_file:
-      - ./.env
+      - ../.env
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     healthcheck:
-      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      test: ["CMD", "mysqladmin" ,"ping", "-h", "localhost"]
       interval: 10s
       timeout: 5s
       retries: 5
     ports:
-      - 3306:3306
-      - 33060:33060
+      - 3310:3306
     volumes:
-      - mariadb-data:/var/lib/mysql
+      - mysql-data:/var/lib/mysql
     networks:
-      - ceramic_network
+      - scapital-staff-new-network
 
 networks:
-  ceramic_network:
+  scapital-staff-new-network:
     driver: bridge
 
 volumes:
-  mariadb-data:
+  mysql-data:
   redis_data:
