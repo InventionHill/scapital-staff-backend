@@ -8,6 +8,7 @@ import { FileUploadModule } from './api/file-upload/file-upload.module';
 import { CallsModule } from './api/calls/calls.module';
 import { LeadsModule } from './api/leads/leads.module';
 import { MobileDashboardModule } from './api/mobile-dashboard/mobile-dashboard.module';
+import { LoanTypesModule } from './api/loan-types/loan-types.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { MobileDashboardModule } from './api/mobile-dashboard/mobile-dashboard.m
     CallsModule,
     LeadsModule,
     MobileDashboardModule,
+    LoanTypesModule,
   ],
   controllers: [AppController],
   providers: [],
