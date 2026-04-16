@@ -54,8 +54,8 @@ export class LeadsService {
     const lead = await this.prisma.lead.findUnique({ where: { id } });
     if (!lead) throw new NotFoundException('Lead not found');
 
-    // Ownership check (bypass for all admin roles)
-    if (user?.userType !== 'ADMIN' && user?.role !== 'ADMIN') {
+    // Ownership check (apply to all mobile users)
+    if (user?.userType === 'MOBILE') {
       if (lead.assignedToId !== user.id && lead.assignedToId !== null) {
         throw new ForbiddenException(
           'You do not have permission to update this lead',
@@ -87,12 +87,7 @@ export class LeadsService {
             : dto.assignedToId
           : lead.assignedToId;
 
-      if (
-        !newAssignedToId &&
-        user?.userType !== 'ADMIN' &&
-        user?.role !== 'ADMIN' &&
-        user?.id
-      ) {
+      if (!newAssignedToId && user?.userType === 'MOBILE' && user?.id) {
         newAssignedToId = user.id;
       }
 
@@ -107,11 +102,14 @@ export class LeadsService {
           assignedToId: newAssignedToId,
           notes: dto.notes !== undefined ? dto.notes : lead.notes,
           nextFollowUpAt: finalFollowUpAt,
+          loanTypeId:
+            dto.loanTypeId !== undefined ? dto.loanTypeId : lead.loanTypeId,
         },
         include: {
           assignedTo: {
             select: { id: true, name: true, username: true },
           },
+          loanType: true,
           _count: {
             select: { callLogs: true },
           },
@@ -130,14 +128,8 @@ export class LeadsService {
     await this.prisma.callLog.create({
       data: {
         leadId: id,
-        adminId:
-          user?.userType === 'ADMIN' || user?.role === 'ADMIN'
-            ? user.id
-            : undefined,
-        callerId:
-          user?.userType === 'MOBILE' || (user?.role && user.role !== 'ADMIN')
-            ? user.id
-            : undefined,
+        adminId: user?.userType === 'ADMIN' ? user.id : undefined,
+        callerId: user?.userType === 'MOBILE' ? user.id : undefined,
         phoneNumber: dto.phoneNumber || lead.phoneNumber,
         callType: 'OUTGOING',
         outcome: finalStatus || lead.status,
@@ -217,7 +209,7 @@ export class LeadsService {
         this.prisma.lead.count({
           where: {
             ...baseLeadWhere,
-            createdAt: { gte: d, lt: nextD },
+            callLogs: { some: { createdAt: { gte: d, lt: nextD } } },
           },
         }),
       );
@@ -308,6 +300,7 @@ export class LeadsService {
         assignedTo: {
           select: { id: true, name: true, username: true },
         },
+        loanType: true,
         _count: {
           select: { callLogs: true },
         },
@@ -334,6 +327,7 @@ export class LeadsService {
         assignedTo: {
           select: { id: true, name: true, username: true },
         },
+        loanType: true,
         _count: {
           select: { callLogs: true },
         },
@@ -348,8 +342,8 @@ export class LeadsService {
     });
     if (!lead) throw new NotFoundException('Lead not found');
 
-    // Ownership check (bypass for all admin roles)
-    if (user?.userType !== 'ADMIN' && user?.role !== 'ADMIN') {
+    // Ownership check (apply to all mobile users)
+    if (user?.userType === 'MOBILE') {
       if (lead.assignedToId !== user.id && lead.assignedToId !== null) {
         throw new ForbiddenException(
           'You do not have permission to view this lead',

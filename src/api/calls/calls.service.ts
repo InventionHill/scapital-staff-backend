@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateCallDto } from './dto/create-call.dto';
 import { GroupedCreateCallDto } from './dto/grouped-create-call.dto';
@@ -335,26 +335,49 @@ export class CallsService {
   }
 
   async update(id: string, updateData: { callerId: string | null }) {
-    if (updateData.callerId === 'unassigned') {
+    // Normalize special unassigned values
+    if (
+      updateData.callerId === 'unassigned' ||
+      updateData.callerId === 'null'
+    ) {
       updateData.callerId = null;
     }
 
-    const callLog = await this.prisma.callLog.update({
-      where: { id },
-      data: updateData,
-      include: {
-        caller: { select: { id: true, name: true } },
-      },
-    });
-
-    // Also update the lead assignment to match the latest call agent
-    if (callLog.leadId) {
-      await this.prisma.lead.update({
-        where: { id: callLog.leadId },
-        data: { assignedToId: updateData.callerId },
+    // Validate that the assigned user exists
+    if (updateData.callerId) {
+      const user = await this.prisma.mobileUser.findUnique({
+        where: { id: updateData.callerId },
       });
+      if (!user) {
+        throw new NotFoundException(
+          `Agent with ID ${updateData.callerId} not found`,
+        );
+      }
     }
 
-    return callLog;
+    try {
+      const callLog = await this.prisma.callLog.update({
+        where: { id },
+        data: updateData,
+        include: {
+          caller: { select: { id: true, name: true } },
+        },
+      });
+
+      // Also update the lead assignment to match the latest call agent
+      if (callLog.leadId) {
+        await this.prisma.lead.update({
+          where: { id: callLog.leadId },
+          data: { assignedToId: updateData.callerId },
+        });
+      }
+
+      return callLog;
+    } catch (error) {
+      if (error.code === 'P2025') {
+        throw new NotFoundException(`Call Log with ID ${id} not found`);
+      }
+      throw error;
+    }
   }
 }

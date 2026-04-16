@@ -49,8 +49,8 @@ model Lead {
   nextFollowUpAt DateTime?
   priority       LeadPriority @default(MEDIUM)
   source         String?
-  serialId       Int?         @unique(map: "serialId") @default(autoincrement())
   loanTypeId     String?
+  serialId       Int?         @unique(map: "serialId") @default(autoincrement())
   callLogs       CallLog[]
   assignedTo     MobileUser?   @relation(fields: [assignedToId], references: [id])
   loanType       LoanType?     @relation(fields: [loanTypeId], references: [id])
@@ -58,29 +58,6 @@ model Lead {
   @@index([assignedToId], map: "leads_assignedToId_fkey")
   @@index([loanTypeId], map: "leads_loanTypeId_fkey")
   @@map("leads")
-}
-
-model LoanType {
-  id        String         @id @default(uuid())
-  name      String         @unique
-  documents LoanDocument[]
-  leads     Lead[]
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
-
-  @@map("loan_types")
-}
-
-model LoanDocument {
-  id          String   @id @default(uuid())
-  name        String
-  description String?  @db.Text
-  loanTypeId  String
-  loanType    LoanType @relation(fields: [loanTypeId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@map("loan_documents")
 }
 
 model CallLog {
@@ -124,4 +101,27 @@ enum LeadPriority {
   LOW
   MEDIUM
   HIGH
+}
+
+model LoanType {
+  id        String         @id @default(uuid())
+  name      String         @unique
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  documents LoanDocument[]
+  leads     Lead[]
+
+  @@map("loan_types")
+}
+
+model LoanDocument {
+  id          String   @id @default(uuid())
+  name        String
+  description String?  @db.Text
+  loanTypeId  String
+  loanType    LoanType @relation(fields: [loanTypeId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("loan_documents")
 }

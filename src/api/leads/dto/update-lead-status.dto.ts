@@ -31,6 +31,10 @@ export class UpdateLeadStatusDto {
   @IsDateString()
   @IsOptional()
   nextFollowUpAt?: string;
+
+  @IsString()
+  @IsOptional()
+  loanTypeId?: string;
 }
 
 export class AssignLeadDto {

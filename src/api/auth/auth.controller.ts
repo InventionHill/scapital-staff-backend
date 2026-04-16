@@ -12,6 +12,7 @@ import {
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { MobileLoginDto } from './dto/mobile-login.dto';
 import { AuthGuard } from '@nestjs/passport';
 
 @Controller('auth')
@@ -29,7 +30,7 @@ export class AuthController {
   }
 
   @Post('users/login')
-  async loginMobile(@Body() data: any) {
+  async loginMobile(@Body() data: MobileLoginDto) {
     return this.authService.loginMobile(data);
   }
 

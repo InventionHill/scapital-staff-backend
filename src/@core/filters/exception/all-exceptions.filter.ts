@@ -37,14 +37,13 @@ export class AllExceptionsFilter extends BaseExceptionFilter {
 
     response.status(status).json({
       status: false,
-      message,
+      message: Array.isArray(message) ? message[0] : message,
       data: {
         error:
           exception?.response?.error ||
           exception?.error ||
           'Internal Server Error',
         statusCode: status,
-        path: request?.url,
       },
     });
   }

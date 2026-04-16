@@ -1,13 +1,13 @@
 import {
-  IsString,
+  IsArray,
   IsNotEmpty,
   IsOptional,
-  IsArray,
+  IsString,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
-export class CreateLoanDocumentDto {
+class LoanDocumentDto {
   @IsString()
   @IsNotEmpty()
   name: string;
@@ -24,19 +24,7 @@ export class CreateLoanTypeDto {
 
   @IsArray()
   @ValidateNested({ each: true })
-  @Type(() => CreateLoanDocumentDto)
+  @Type(() => LoanDocumentDto)
   @IsOptional()
-  documents?: CreateLoanDocumentDto[];
-}
-
-export class UpdateLoanTypeDto {
-  @IsString()
-  @IsOptional()
-  name?: string;
-
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => CreateLoanDocumentDto)
-  @IsOptional()
-  documents?: CreateLoanDocumentDto[];
+  documents?: LoanDocumentDto[];
 }
