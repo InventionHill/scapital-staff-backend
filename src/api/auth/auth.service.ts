@@ -117,9 +117,21 @@ export class AuthService {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { password, ...result } = user;
 
+      const payload = {
+        email: user.email,
+        sub: user.id,
+        role: user.role || 'SUPER_ADMIN',
+        userType: 'SUPER_ADMIN',
+      };
+
       return {
         message: 'Super Admin registered successfully',
-        user: result,
+        access_token: this.jwtService.sign(payload),
+        user: {
+          ...result,
+          userType: 'SUPER_ADMIN',
+          role: user.role || 'SUPER_ADMIN',
+        },
       };
     } catch (error) {
       if (error.code === 'P2002') {

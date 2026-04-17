@@ -2,7 +2,7 @@
 import axios from 'axios';
 
 // Using IPv4 localhost to avoid node 17+ IPv6 issues if any
-const BASE_URL = 'http://127.0.0.1:8000/api/v1';
+const BASE_URL = 'http://127.0.0.1:8000/api';
 
 async function verifyApis() {
   console.log('🚀 Starting API Verification...');
@@ -26,7 +26,7 @@ async function verifyApis() {
 
   try {
     console.log(`Attempting to login as ${fixedUser.email}...`);
-    const loginRes = await axios.post(`${BASE_URL}/auth/login`, {
+    const loginRes = await axios.post(`${BASE_URL}/v1/auth/login`, {
       email: fixedUser.email,
       password: fixedUser.password,
     });
@@ -40,7 +40,7 @@ async function verifyApis() {
       console.log('Login failed (401/404), attempting to register new user...');
       try {
         const registerRes = await axios.post(
-          `${BASE_URL}/auth/register`,
+          `${BASE_URL}/v1/auth/register`,
           testUser,
         );
         token = registerRes.data.access_token;
@@ -48,7 +48,7 @@ async function verifyApis() {
 
         // Try to register the fixed user for next time too, silently
         try {
-          await axios.post(`${BASE_URL}/auth/register`, fixedUser);
+          await axios.post(`${BASE_URL}/v1/auth/register`, fixedUser);
         } catch (e) {
           /* ignore */
         }
