@@ -16,13 +16,9 @@ async function main() {
   const token = jwt.sign(payload, 'supersecret', { expiresIn: '1h' });
 
   try {
-    const res2 = await axios.get(
-      'http://127.0.0.1:8005/api/v1/calls?page=1&limit=10',
-      {
-        headers: { Authorization: `Bearer ${token}` },
-      },
-    );
-    console.log('SUCCESS length:', res2.data?.data?.length);
+    await axios.get('http://127.0.0.1:8005/api/v1/calls?page=1&limit=10', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
   } catch (e: any) {
     if (e.response) {
       console.error(

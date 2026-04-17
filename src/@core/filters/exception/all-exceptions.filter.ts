@@ -21,8 +21,13 @@ export class AllExceptionsFilter extends BaseExceptionFilter {
         ? exception.getStatus()
         : HttpStatus.INTERNAL_SERVER_ERROR;
 
+    const exceptionResponse =
+      typeof exception.getResponse === 'function'
+        ? exception.getResponse()
+        : exception?.response;
+
     const message =
-      exception?.response?.message ||
+      exceptionResponse?.message ||
       exception?.message ||
       'Internal server error';
 
@@ -31,7 +36,7 @@ export class AllExceptionsFilter extends BaseExceptionFilter {
       message: message,
       status: status,
       name: exception?.name,
-      error: exception?.response?.error || exception?.error,
+      error: exceptionResponse?.error || exception?.error,
       endpoint: request?.url,
     });
 
@@ -40,7 +45,7 @@ export class AllExceptionsFilter extends BaseExceptionFilter {
       message: Array.isArray(message) ? message[0] : message,
       data: {
         error:
-          exception?.response?.error ||
+          exceptionResponse?.error ||
           exception?.error ||
           'Internal Server Error',
         statusCode: status,

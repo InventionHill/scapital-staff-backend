@@ -35,6 +35,10 @@ export class UpdateLeadStatusDto {
   @IsString()
   @IsOptional()
   loanTypeId?: string;
+
+  @IsString()
+  @IsOptional()
+  branchId?: string;
 }
 
 export class AssignLeadDto {

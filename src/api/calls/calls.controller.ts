@@ -8,6 +8,7 @@ import {
   Patch,
   Param,
   Res,
+  Request,
 } from '@nestjs/common';
 import { CallsService } from './calls.service';
 import { GroupedCreateCallDto } from './dto/grouped-create-call.dto';
@@ -25,6 +26,7 @@ export class CallsController {
   @Get()
   @UseGuards(AuthGuard('jwt'))
   async findAll(
+    @Request() req: any,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('assignedToId') assignedToId?: string,
@@ -34,6 +36,7 @@ export class CallsController {
     @Query('limit') limit: number = 10,
   ) {
     return this.callsService.findAll(
+      req.user,
       startDate,
       endDate,
       assignedToId,
@@ -47,6 +50,7 @@ export class CallsController {
   @Get('export')
   @UseGuards(AuthGuard('jwt'))
   async export(
+    @Request() req: any,
     @Res() res: any,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
@@ -55,6 +59,7 @@ export class CallsController {
     @Query('status') status?: string,
   ) {
     const buffer = await this.callsService.exportCallLogs(
+      req.user,
       startDate,
       endDate,
       assignedToId,
