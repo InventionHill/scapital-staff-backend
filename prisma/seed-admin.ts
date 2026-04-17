@@ -1,23 +1,53 @@
+/* eslint-disable no-console */
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  const hashedPassword = await bcrypt.hash('admin123', 10);
-  
-  // Seed Admin
-  const admin = await prisma.adminUser.upsert({
-    where: { email: 'admin@scapital.com' },
+  // 1. Seed Branches
+  await prisma.branch.upsert({
+    where: { name: 'Scapital' },
     update: {},
-    create: {
-      email: 'admin@scapital.com',
-      password: hashedPassword,
-      name: 'Admin',
-      role: 'ADMIN'
-    }
+    create: { name: 'Scapital', location: 'Main Office' },
   });
-  console.log('Admin user seeded: admin@scapital.com / admin123');
+
+  await prisma.branch.upsert({
+    where: { name: 'MoneyLoan' },
+    update: {},
+    create: { name: 'MoneyLoan', location: 'Branch Office' },
+  });
+
+  // 2. Seed Super Admin
+  const rootEmail = process.env.SUPER_ADMIN_EMAIL;
+  const rootPassword = process.env.SUPER_ADMIN_PASSWORD;
+
+  if (!rootEmail || !rootPassword) {
+    console.warn(
+      'WARNING: SUPER_ADMIN_EMAIL or SUPER_ADMIN_PASSWORD not set. Skipping Super Admin creation.',
+    );
+  } else {
+    const rootHashedPassword = await bcrypt.hash(rootPassword, 10);
+    await prisma.superAdmin.upsert({
+      where: { email: rootEmail },
+      update: {},
+      create: {
+        email: rootEmail,
+        password: rootHashedPassword,
+        name: 'Super Admin',
+      },
+    });
+    console.log(`Initial Super Admin seeded with email: ${rootEmail}`);
+  }
+
+  console.log('Branches seeded successfully.');
 }
 
-main().catch(e => { console.error(e); process.exit(1); }).finally(async () => { await prisma.$disconnect(); });
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

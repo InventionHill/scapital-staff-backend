@@ -12,56 +12,74 @@ export class MobileDashboardService {
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
-    // 1. Fetch Stats
-    const [
-      totalLeads,
-      followUps,
-      completed,
-      todayCalls,
-      highPriorityTodayCount,
-    ] = await Promise.all([
-      // Total Leads assigned to this user OR unassigned
-      this.prisma.lead.count({
-        where: {
-          OR: [{ assignedToId: user.id }, { assignedToId: null }],
-        },
-      }),
-      // Leads with FOLLOW_UP status
-      this.prisma.lead.count({
-        where: {
-          OR: [{ assignedToId: user.id }, { assignedToId: null }],
-          status: 'FOLLOW_UP',
-        },
-      }),
-      // Leads with COMPLETED status
-      this.prisma.lead.count({
-        where: {
-          OR: [{ assignedToId: user.id }, { assignedToId: null }],
-          status: 'COMPLETED',
-        },
-      }),
-      // Calls made today by this user
-      this.prisma.callLog.count({
-        where: {
-          callerId: user.id,
-          createdAt: { gte: todayStart, lte: todayEnd },
-        },
-      }),
-      // High Priority Follow-ups for Today
-      this.prisma.lead.count({
-        where: {
-          OR: [{ assignedToId: user.id }, { assignedToId: null }],
-          priority: 'HIGH',
-          status: 'FOLLOW_UP',
-          nextFollowUpAt: { gte: todayStart, lte: todayEnd },
-        },
-      }),
-    ]);
+    // MOBILE ID ISOLATION
+    const baseWhere: any = {};
+    if (user.userType === 'MOBILE') {
+      // Get the admin for this branch, then filter by their allowed mobile IDs
+      const branchAdmin = await this.prisma.adminUser.findFirst({
+        where: { branchId: user.branchId },
+      });
 
-    // 2. Fetch All Follow-up Tasks assigned to this user OR unassigned (Top 10)
+      if (!branchAdmin) {
+        baseWhere.id = 'none'; // No admin = no leads
+      } else {
+        const allowedMobileIds = (branchAdmin.mobileIds as string[]) || [];
+        baseWhere.mobileId = { in: allowedMobileIds };
+        baseWhere.OR = [{ assignedToId: user.id }, { assignedToId: null }];
+      }
+    } else if (user.userType === 'ADMIN') {
+      // Admin only sees leads whose mobileId is in their mobileIds array
+      const admin = await this.prisma.adminUser.findUnique({
+        where: { id: user.id },
+      });
+      const allowedIds = (admin?.mobileIds as string[]) || [];
+      baseWhere.mobileId = { in: allowedIds };
+    }
+
+    // 1. Fetch Stats
+    const [totalLeads, followUps, completed, todayCalls, todayFollowUpCount] =
+      await Promise.all([
+        // Total Leads
+        this.prisma.lead.count({
+          where: { ...baseWhere },
+        }),
+        // Leads with FOLLOW_UP status
+        this.prisma.lead.count({
+          where: {
+            ...baseWhere,
+            status: 'FOLLOW_UP',
+          },
+        }),
+        // Leads with COMPLETED status
+        this.prisma.lead.count({
+          where: {
+            ...baseWhere,
+            status: 'COMPLETED',
+          },
+        }),
+        // Calls made today (filtered by mobileId isolation)
+        this.prisma.callLog.count({
+          where: {
+            ...(user.userType === 'MOBILE'
+              ? { callerId: user.id }
+              : { lead: { ...baseWhere } }),
+            createdAt: { gte: todayStart, lte: todayEnd },
+          },
+        }),
+        // Follow-ups scheduled for Today
+        this.prisma.lead.count({
+          where: {
+            ...baseWhere,
+            status: 'FOLLOW_UP',
+            nextFollowUpAt: { gte: todayStart, lte: todayEnd },
+          },
+        }),
+      ]);
+
+    // 2. Fetch All Follow-up Tasks (Top 10)
     const rawFollowUpTasks = await this.prisma.lead.findMany({
       where: {
-        OR: [{ assignedToId: user.id }, { assignedToId: null }],
+        ...baseWhere,
         status: 'FOLLOW_UP',
       },
       orderBy: [
@@ -86,10 +104,11 @@ export class MobileDashboardService {
     return {
       welcome: {
         name: user.name || user.username || 'User',
-        summary: `You have ${highPriorityTodayCount} high-priority follow-ups today.`,
+        summary: `You have ${todayFollowUpCount} follow-ups today.`,
         privacyPolicyUrl: 'https://scapital.in/privacy-policy',
         termsConditionUrl: 'https://scapital.in/terms',
         userNumber: user.mobileNumber || 'N/A',
+        branchName: user.branchName || user.branch?.name || 'N/A',
       },
       stats: {
         totalLeads,

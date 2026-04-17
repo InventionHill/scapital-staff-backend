@@ -12,7 +12,10 @@ import {
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { MobileLoginDto } from './dto/mobile-login.dto';
 import { AuthGuard } from '@nestjs/passport';
+import { Roles } from '../../@core/decorators/roles.decorator';
+import { RolesGuard } from '../../@core/guards/roles.guard';
 
 @Controller('auth')
 export class AuthController {
@@ -29,23 +32,24 @@ export class AuthController {
   }
 
   @Post('users/login')
-  async loginMobile(@Body() data: any) {
+  async loginMobile(@Body() data: MobileLoginDto) {
     return this.authService.loginMobile(data);
   }
 
   @UseGuards(AuthGuard('jwt'))
   @Post('users')
-  async createMobileUser(@Body() data: any) {
-    return this.authService.createMobileUser(data);
+  async createMobileUser(@Body() data: any, @Request() req: any) {
+    return this.authService.createMobileUser(data, req.user);
   }
 
   @UseGuards(AuthGuard('jwt'))
   @Get('users')
-  async findAll() {
-    return this.authService.findAll();
+  async findAll(@Request() req: any) {
+    return this.authService.findAll(req.user);
   }
 
-  @UseGuards(AuthGuard('jwt'))
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN')
   @Get('admins')
   async findAllAdmins() {
     return this.authService.findAllAdmins();
@@ -58,6 +62,12 @@ export class AuthController {
   }
 
   @UseGuards(AuthGuard('jwt'))
+  @Get('debug-me')
+  debugMe(@Request() req) {
+    return req.user;
+  }
+
+  @UseGuards(AuthGuard('jwt'))
   @Patch('users/:id/reset-password')
   async resetPassword(@Param('id') id: string, @Body('password') pass: string) {
     return this.authService.resetPassword(id, pass);
@@ -65,8 +75,33 @@ export class AuthController {
 
   @UseGuards(AuthGuard('jwt'))
   @Patch('users/:id')
-  async update(@Param('id') id: string, @Body() data: any) {
-    return this.authService.update(id, data);
+  async update(
+    @Param('id') id: string,
+    @Body() data: any,
+    @Request() req: any,
+  ) {
+    return this.authService.update(id, data, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN')
+  @Post('admins')
+  async createAdmin(@Body() dto: any) {
+    return this.authService.createAdmin(dto);
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN')
+  @Patch('admins/:id')
+  async updateAdmin(@Param('id') id: string, @Body() data: any) {
+    return this.authService.updateAdmin(id, data);
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN')
+  @Delete('admins/:id')
+  async removeAdmin(@Param('id') id: string) {
+    return this.authService.removeAdmin(id);
   }
 
   @UseGuards(AuthGuard('jwt'))

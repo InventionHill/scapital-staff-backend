@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CreateCallDto } from './dto/create-call.dto';
 import { GroupedCreateCallDto } from './dto/grouped-create-call.dto';
@@ -10,8 +14,22 @@ export class CallsService {
 
   async handleIncomingCall(dto: CreateCallDto) {
     // Allow all call types
-
     const callTime = dto.time;
+
+    // IDENTIFY BRANCH/ADMIN BY MOBILE ID
+    let identifiedBranchId = null;
+    if (dto.mobileId) {
+      const admin = await this.prisma.adminUser.findFirst({
+        where: {
+          mobileIds: {
+            array_contains: dto.mobileId,
+          },
+        },
+      });
+      if (admin) {
+        identifiedBranchId = admin.branchId;
+      }
+    }
 
     // 1. Find or create lead
     let lead = await this.prisma.lead.findUnique({
@@ -25,12 +43,34 @@ export class CallsService {
           status: 'NEW',
           assignedToId: dto.callerId, // Auto-assign to the first person who handled it
           createdAt: callTime ? new Date(callTime) : undefined,
+          mobileId: dto.mobileId, // Store the generating mobile ID
+          branchId: identifiedBranchId, // Explicitly assign to the identified branch
         },
       });
     } else {
+      // Validate assignment if a specific caller is logging the call
+      if (
+        lead.assignedToId !== null &&
+        dto.callerId &&
+        lead.assignedToId !== dto.callerId
+      ) {
+        throw new ForbiddenException(
+          'This lead is already assigned to another mobile user',
+        );
+      }
+
       const updateData: any = {};
       if (!lead.assignedToId && dto.callerId) {
         updateData.assignedToId = dto.callerId;
+      }
+
+      // If lead was previously unassigned to a branch, assign it now if we have a match
+      if (!lead.branchId && identifiedBranchId) {
+        updateData.branchId = identifiedBranchId;
+      }
+
+      if (!lead.mobileId && dto.mobileId) {
+        updateData.mobileId = dto.mobileId;
       }
 
       if (Object.keys(updateData).length > 0) {
@@ -107,7 +147,7 @@ export class CallsService {
       } catch (error) {
         results.push({
           status: 'error',
-          message: error.message,
+          message: error?.response?.message || error.message,
           phoneNumber: dto.phoneNumber,
         });
       }
@@ -131,7 +171,7 @@ export class CallsService {
       } catch (error) {
         results.push({
           status: 'error',
-          message: error.message,
+          message: error?.response?.message || error.message,
           phoneNumber: callDto.phoneNumber,
         });
       }
@@ -141,6 +181,7 @@ export class CallsService {
   }
 
   async findAll(
+    user: any,
     startDate?: string,
     endDate?: string,
     callerId?: string,
@@ -152,6 +193,34 @@ export class CallsService {
     const where: any = {
       callLogs: { some: {} }, // Ensure lead has at least one call log
     };
+
+    // BRANCH & MOBILE ID ISOLATION
+    if (user?.userType === 'ADMIN' && user?.role === 'ADMIN') {
+      // 1. Get admin's allowed mobile IDs
+      const admin = await this.prisma.adminUser.findUnique({
+        where: { id: user.id },
+      });
+      const allowedIds = (admin?.mobileIds as string[]) || [];
+      where.mobileId = { in: allowedIds };
+    } else if (user?.userType === 'MOBILE') {
+      // 1. Get the admin for this branch
+      const branchAdmin = await this.prisma.adminUser.findUnique({
+        where: { branchId: user.branchId },
+      });
+
+      if (!branchAdmin) {
+        where.id = 'none';
+      } else {
+        const allowedMobileIds = (branchAdmin.mobileIds as string[]) || [];
+        where.mobileId = { in: allowedMobileIds };
+        where.AND = [
+          ...(where.AND || []),
+          {
+            OR: [{ assignedToId: user.id }, { assignedToId: null }],
+          },
+        ];
+      }
+    }
 
     if (callerId) {
       if (callerId === 'unassigned') {
@@ -234,6 +303,7 @@ export class CallsService {
   }
 
   async exportCallLogs(
+    user: any,
     startDate?: string,
     endDate?: string,
     callerId?: string,
@@ -243,6 +313,32 @@ export class CallsService {
     const where: any = {
       callLogs: { some: {} },
     };
+
+    // MOBILE ID ISOLATION (consistent with findAll)
+    if (user?.userType === 'ADMIN' && user?.role === 'ADMIN') {
+      const admin = await this.prisma.adminUser.findUnique({
+        where: { id: user.id },
+      });
+      const allowedIds = (admin?.mobileIds as string[]) || [];
+      where.mobileId = { in: allowedIds };
+    } else if (user?.userType === 'MOBILE') {
+      const branchAdmin = await this.prisma.adminUser.findUnique({
+        where: { branchId: user.branchId },
+      });
+
+      if (!branchAdmin) {
+        where.id = 'none';
+      } else {
+        const allowedMobileIds = (branchAdmin.mobileIds as string[]) || [];
+        where.mobileId = { in: allowedMobileIds };
+        where.AND = [
+          ...(where.AND || []),
+          {
+            OR: [{ assignedToId: user.id }, { assignedToId: null }],
+          },
+        ];
+      }
+    }
 
     if (callerId) {
       if (callerId === 'unassigned') {
@@ -335,26 +431,49 @@ export class CallsService {
   }
 
   async update(id: string, updateData: { callerId: string | null }) {
-    if (updateData.callerId === 'unassigned') {
+    // Normalize special unassigned values
+    if (
+      updateData.callerId === 'unassigned' ||
+      updateData.callerId === 'null'
+    ) {
       updateData.callerId = null;
     }
 
-    const callLog = await this.prisma.callLog.update({
-      where: { id },
-      data: updateData,
-      include: {
-        caller: { select: { id: true, name: true } },
-      },
-    });
-
-    // Also update the lead assignment to match the latest call agent
-    if (callLog.leadId) {
-      await this.prisma.lead.update({
-        where: { id: callLog.leadId },
-        data: { assignedToId: updateData.callerId },
+    // Validate that the assigned user exists
+    if (updateData.callerId) {
+      const user = await this.prisma.mobileUser.findUnique({
+        where: { id: updateData.callerId },
       });
+      if (!user) {
+        throw new NotFoundException(
+          `Agent with ID ${updateData.callerId} not found`,
+        );
+      }
     }
 
-    return callLog;
+    try {
+      const callLog = await this.prisma.callLog.update({
+        where: { id },
+        data: updateData,
+        include: {
+          caller: { select: { id: true, name: true } },
+        },
+      });
+
+      // Also update the lead assignment to match the latest call agent
+      if (callLog.leadId) {
+        await this.prisma.lead.update({
+          where: { id: callLog.leadId },
+          data: { assignedToId: updateData.callerId },
+        });
+      }
+
+      return callLog;
+    } catch (error) {
+      if (error.code === 'P2025') {
+        throw new NotFoundException(`Call Log with ID ${id} not found`);
+      }
+      throw error;
+    }
   }
 }

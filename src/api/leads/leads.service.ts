@@ -54,11 +54,11 @@ export class LeadsService {
     const lead = await this.prisma.lead.findUnique({ where: { id } });
     if (!lead) throw new NotFoundException('Lead not found');
 
-    // Ownership check (bypass for all admin roles)
-    if (user?.userType !== 'ADMIN' && user?.role !== 'ADMIN') {
+    // Ownership check (apply to all mobile users)
+    if (user?.userType === 'MOBILE') {
       if (lead.assignedToId !== user.id && lead.assignedToId !== null) {
         throw new ForbiddenException(
-          'You do not have permission to update this lead',
+          'This lead is already assigned to another mobile user',
         );
       }
 
@@ -66,6 +66,13 @@ export class LeadsService {
       if (lead.status === 'CLOSED') {
         throw new ForbiddenException(
           'Only administrators can modify a closed lead',
+        );
+      }
+    } else if (user?.userType === 'ADMIN' && user.role === 'ADMIN') {
+      // Branch isolation for admins
+      if (lead.branchId !== user.branchId) {
+        throw new ForbiddenException(
+          'You do not have permission to update leads outside your branch',
         );
       }
     }
@@ -87,13 +94,32 @@ export class LeadsService {
             : dto.assignedToId
           : lead.assignedToId;
 
-      if (
-        !newAssignedToId &&
-        user?.userType !== 'ADMIN' &&
-        user?.role !== 'ADMIN' &&
-        user?.id
-      ) {
+      if (!newAssignedToId && user?.userType === 'MOBILE' && user?.id) {
         newAssignedToId = user.id;
+      }
+      if (dto.loanTypeId && dto.loanTypeId !== 'unassigned') {
+        let targetAdminId = user?.id;
+
+        if (user?.userType === 'MOBILE') {
+          const branchAdmin = await this.prisma.adminUser.findFirst({
+            where: { branchId: user.branchId },
+          });
+          if (branchAdmin) {
+            targetAdminId = branchAdmin.id;
+          }
+        }
+
+        const lt = await this.prisma.loanType.findFirst({
+          where: {
+            id: dto.loanTypeId,
+            createdBy: targetAdminId, // Context-aware isolation
+          },
+        });
+        if (!lt) {
+          throw new ForbiddenException(
+            'You do not have permission to use this loan type or it does not exist',
+          );
+        }
       }
 
       // Update lead record
@@ -107,11 +133,14 @@ export class LeadsService {
           assignedToId: newAssignedToId,
           notes: dto.notes !== undefined ? dto.notes : lead.notes,
           nextFollowUpAt: finalFollowUpAt,
+          loanTypeId:
+            dto.loanTypeId !== undefined ? dto.loanTypeId : lead.loanTypeId,
         },
         include: {
           assignedTo: {
             select: { id: true, name: true, username: true },
           },
+          loanType: true,
           _count: {
             select: { callLogs: true },
           },
@@ -130,14 +159,8 @@ export class LeadsService {
     await this.prisma.callLog.create({
       data: {
         leadId: id,
-        adminId:
-          user?.userType === 'ADMIN' || user?.role === 'ADMIN'
-            ? user.id
-            : undefined,
-        callerId:
-          user?.userType === 'MOBILE' || (user?.role && user.role !== 'ADMIN')
-            ? user.id
-            : undefined,
+        adminId: user?.userType === 'ADMIN' ? user.id : undefined,
+        callerId: user?.userType === 'MOBILE' ? user.id : undefined,
         phoneNumber: dto.phoneNumber || lead.phoneNumber,
         callType: 'OUTGOING',
         outcome: finalStatus || lead.status,
@@ -158,10 +181,34 @@ export class LeadsService {
 
     const baseLeadWhere: any = {};
 
-    // Filter by assignedToId for mobile users
+    // BRANCH & MOBILE ID ISOLATION
     if (user?.userType === 'MOBILE') {
-      baseCallWhere.callerId = user.id;
-      baseLeadWhere.assignedToId = user.id;
+      // 1. Get the admin for this branch
+      const branchAdmin = await this.prisma.adminUser.findFirst({
+        where: { branchId: user.branchId },
+      });
+
+      if (!branchAdmin) {
+        baseLeadWhere.id = 'none';
+      } else {
+        const allowedMobileIds = (branchAdmin.mobileIds as string[]) || [];
+        baseLeadWhere.mobileId = { in: allowedMobileIds };
+        baseLeadWhere.OR = [{ assignedToId: user.id }, { assignedToId: null }];
+      }
+    } else if (user?.userType === 'ADMIN') {
+      // 1. Get admin's allowed mobile IDs
+      const admin = await this.prisma.adminUser.findUnique({
+        where: { id: user.id },
+      });
+      const allowedIds = (admin?.mobileIds as string[]) || [];
+      baseLeadWhere.mobileId = { in: allowedIds };
+      // For call logs, we want logs related to these leads
+      baseCallWhere.lead = { mobileId: { in: allowedIds } };
+    }
+
+    let totalAdmins = 0;
+    if (user?.userType === 'SUPER_ADMIN') {
+      totalAdmins = await this.prisma.adminUser.count();
     }
 
     const [
@@ -217,7 +264,7 @@ export class LeadsService {
         this.prisma.lead.count({
           where: {
             ...baseLeadWhere,
-            createdAt: { gte: d, lt: nextD },
+            callLogs: { some: { createdAt: { gte: d, lt: nextD } } },
           },
         }),
       );
@@ -239,6 +286,7 @@ export class LeadsService {
       newLeads: newLeadsCount,
       todayCalls: todayCallsCount,
       assignedCalls: assignedLeadsCount,
+      totalAdmins,
       last7DaysCalls,
     };
   }
@@ -277,20 +325,44 @@ export class LeadsService {
     startDate?: string,
     endDate?: string,
     assignedToId?: string,
+    branchId?: string,
   ) {
     const where: any = status ? { status } : {};
 
-    // Data isolation for mobile users
-    if (user?.userType === 'MOBILE') {
-      where.OR = [{ assignedToId: user.id }, { assignedToId: null }];
-    } else if (assignedToId) {
-      // Admin can filter by assignedToId
-      if (assignedToId === 'unassigned') {
-        where.assignedToId = null;
-      } else {
-        where.assignedToId = assignedToId;
-      }
+    // Branch filtering from query (if provided)
+    if (branchId) {
+      where.branchId = branchId;
     }
+
+    // Data isolation for role-based access
+    if (user?.userType === 'MOBILE') {
+      // 1. Get the admin for this branch
+      const branchAdmin = await this.prisma.adminUser.findUnique({
+        where: { branchId: user.branchId },
+      });
+
+      if (!branchAdmin) {
+        // If no admin is assigned to this branch yet, mobile users see nothing
+        where.id = 'none';
+      } else {
+        const allowedMobileIds = (branchAdmin.mobileIds as string[]) || [];
+        where.mobileId = { in: allowedMobileIds };
+        where.AND = [
+          ...(where.AND || []),
+          {
+            OR: [{ assignedToId: user.id }, { assignedToId: null }],
+          },
+        ];
+      }
+    } else if (user?.userType === 'ADMIN' && user.role === 'ADMIN') {
+      // 1. Get admin's allowed mobile IDs
+      const admin = await this.prisma.adminUser.findUnique({
+        where: { id: user.id },
+      });
+      const allowedIds = (admin?.mobileIds as string[]) || [];
+      where.mobileId = { in: allowedIds };
+    }
+    // SUPER_ADMIN sees everything unless they explicitly filter by branchId query
 
     if (startDate || endDate) {
       where.createdAt = {};
@@ -308,6 +380,7 @@ export class LeadsService {
         assignedTo: {
           select: { id: true, name: true, username: true },
         },
+        loanType: true,
         _count: {
           select: { callLogs: true },
         },
@@ -334,6 +407,7 @@ export class LeadsService {
         assignedTo: {
           select: { id: true, name: true, username: true },
         },
+        loanType: true,
         _count: {
           select: { callLogs: true },
         },
@@ -348,9 +422,32 @@ export class LeadsService {
     });
     if (!lead) throw new NotFoundException('Lead not found');
 
-    // Ownership check (bypass for all admin roles)
-    if (user?.userType !== 'ADMIN' && user?.role !== 'ADMIN') {
-      if (lead.assignedToId !== user.id && lead.assignedToId !== null) {
+    // BRANCH & MOBILE ID ISOLATION check (apply to both admin and mobile)
+    if (user?.userType === 'MOBILE') {
+      const branchAdmin = await this.prisma.adminUser.findUnique({
+        where: { branchId: user.branchId },
+      });
+
+      const allowedMobileIds = (branchAdmin?.mobileIds as string[]) || [];
+      if (!lead.mobileId || !allowedMobileIds.includes(lead.mobileId)) {
+        throw new ForbiddenException(
+          'You do not have permission to view this lead',
+        );
+      }
+
+      // Assignment Isolation: Prevent mobile users from viewing leads assigned to others
+      if (lead.assignedToId !== null && lead.assignedToId !== user.id) {
+        throw new ForbiddenException(
+          'This lead is already assigned to another mobile user',
+        );
+      }
+    } else if (user?.userType === 'ADMIN' && user.role === 'ADMIN') {
+      const admin = await this.prisma.adminUser.findUnique({
+        where: { id: user.id },
+      });
+      const allowedMobileIds = (admin?.mobileIds as string[]) || [];
+
+      if (!lead.mobileId || !allowedMobileIds.includes(lead.mobileId)) {
         throw new ForbiddenException(
           'You do not have permission to view this lead',
         );

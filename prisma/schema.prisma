@@ -12,12 +12,27 @@ model AdminUser {
   email        String    @unique
   password     String
   name         String?
-  role         String    @default("ADMIN")
+  role         String    @default("ADMIN") // Fixed to ADMIN
+  branchId     String?   @unique // Ensure only one admin per branch
+  branch       Branch?   @relation(fields: [branchId], references: [id])
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   callLogs     CallLog[]
+  mobileIds    Json?     // Array of strings: ["id1", "id2"]
 
   @@map("admin_users")
+}
+
+model SuperAdmin {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  role      String   @default("SUPER_ADMIN")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("super_admins")
 }
 
 model MobileUser {
@@ -27,6 +42,8 @@ model MobileUser {
   mobileNumber String?
   password     String
   role         String   @default("USER")
+  branchId     String?
+  branch       Branch?  @relation(fields: [branchId], references: [id])
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   callLogs     CallLog[]
@@ -49,11 +66,18 @@ model Lead {
   nextFollowUpAt DateTime?
   priority       LeadPriority @default(MEDIUM)
   source         String?
+  loanTypeId     String?
+  branchId       String?
+  mobileId       String?      // The incoming mobile ID that generated this lead
+  branch         Branch?       @relation(fields: [branchId], references: [id])
   serialId       Int?         @unique(map: "serialId") @default(autoincrement())
   callLogs       CallLog[]
   assignedTo     MobileUser?   @relation(fields: [assignedToId], references: [id])
+  loanType       LoanType?     @relation(fields: [loanTypeId], references: [id])
 
   @@index([assignedToId], map: "leads_assignedToId_fkey")
+  @@index([loanTypeId], map: "leads_loanTypeId_fkey")
+  @@index([mobileId])
   @@map("leads")
 }
 
@@ -98,4 +122,42 @@ enum LeadPriority {
   LOW
   MEDIUM
   HIGH
+}
+
+model LoanType {
+  id        String         @id @default(uuid())
+  name      String
+  createdBy String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  documents LoanDocument[]
+  leads     Lead[]
+
+  @@index([createdBy])
+  @@map("loan_types")
+}
+
+model LoanDocument {
+  id          String   @id @default(uuid())
+  name        String
+  description String?  @db.Text
+  loanTypeId  String
+  loanType    LoanType @relation(fields: [loanTypeId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("loan_documents")
+}
+
+model Branch {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  location    String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  admins      AdminUser[]
+  mobileUsers MobileUser[]
+  leads       Lead[]
+
+  @@map("branches")
 }

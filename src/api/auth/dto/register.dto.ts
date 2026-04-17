@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsOptional, MinLength } from 'class-validator';
 
 export class RegisterDto {
   @IsEmail()
@@ -11,4 +11,9 @@ export class RegisterDto {
 
   @IsNotEmpty()
   name: string;
+
+  branchId?: string;
+
+  @IsOptional()
+  role?: string; // ADMIN, SUPER_ADMIN
 }

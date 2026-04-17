@@ -34,9 +34,23 @@ export class TransformInterceptor<T> implements NestInterceptor<
 
     return next.handle().pipe(
       map((data) => {
-        // If data already contains a message, use it
-        const message = data?.message || defaultMessage;
-        const responseData = data?.message && data?.data ? data.data : data;
+        // Handle cases where data is already wrapped or has a message
+        let message = defaultMessage;
+        let responseData = data;
+
+        if (data && typeof data === 'object') {
+          if (data.message) {
+            message = data.message;
+            // If it's a wrapper like { message, data }, unwrap it
+            if (data.data !== undefined) {
+              responseData = data.data;
+            } else {
+              // If it's just { message, ...otherFields }, remove message from data
+              const { message: _message, ...rest } = data;
+              responseData = rest;
+            }
+          }
+        }
 
         return {
           status: true,
