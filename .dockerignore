@@ -1,15 +1,41 @@
-**/*.env
-
 # Dependencies
-**/node_modules
+node_modules
 
-# Other unnecessary files or directories
-.git/
-.vscode/
-.idea/
+# Build output (built inside Docker)
+dist
+
+# Environment files (injected by deployment platform)
+.env
+.env.*
+!.env.example
+
+# Version control
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+
+# Logs
 *.log
+logs
 
-# Build files
-dist/
-public/
-logs/
+# Dev/test files
+test
+coverage
+*.spec.ts
+
+# Scripts not needed in production
+scratch
+scripts
+get-auth.ts
+get-token.ts
+test-calls.ts
+debug-calls.ts
+
+# Other
+public
+.DS_Store
+README.md
+.husky
