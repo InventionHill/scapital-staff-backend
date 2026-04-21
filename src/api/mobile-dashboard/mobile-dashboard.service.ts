@@ -24,57 +24,64 @@ export class MobileDashboardService {
         baseWhere.id = 'none'; // No admin = no leads
       } else {
         const allowedMobileIds = (branchAdmin.mobileIds as string[]) || [];
-        baseWhere.mobileId = { in: allowedMobileIds };
-        baseWhere.OR = [{ assignedToId: user.id }, { assignedToId: null }];
+        baseWhere.AND = [
+          {
+            OR: [
+              { mobileId: { in: allowedMobileIds } },
+              { mobileId: null, branchId: user.branchId },
+            ],
+          },
+          {
+            OR: [{ assignedToId: user.id }, { assignedToId: null }],
+          },
+        ];
       }
     } else if (user.userType === 'ADMIN') {
-      // Admin only sees leads whose mobileId is in their mobileIds array
+      // Admin only sees leads whose mobileId is in their mobileIds array, plus manual leads
       const admin = await this.prisma.adminUser.findUnique({
         where: { id: user.id },
       });
       const allowedIds = (admin?.mobileIds as string[]) || [];
-      baseWhere.mobileId = { in: allowedIds };
+      baseWhere.AND = [
+        {
+          OR: [
+            { mobileId: { in: allowedIds } },
+            { mobileId: null, branchId: user.branchId },
+          ],
+        },
+      ];
     }
 
     // 1. Fetch Stats
-    const [totalLeads, followUps, completed, todayCalls, todayFollowUpCount] =
-      await Promise.all([
-        // Total Leads
-        this.prisma.lead.count({
-          where: { ...baseWhere },
-        }),
-        // Leads with FOLLOW_UP status
-        this.prisma.lead.count({
-          where: {
-            ...baseWhere,
-            status: 'FOLLOW_UP',
-          },
-        }),
-        // Leads with COMPLETED status
-        this.prisma.lead.count({
-          where: {
-            ...baseWhere,
-            status: 'COMPLETED',
-          },
-        }),
-        // Calls made today (filtered by mobileId isolation)
-        this.prisma.callLog.count({
-          where: {
-            ...(user.userType === 'MOBILE'
-              ? { callerId: user.id }
-              : { lead: { ...baseWhere } }),
-            createdAt: { gte: todayStart, lte: todayEnd },
-          },
-        }),
-        // Follow-ups scheduled for Today
-        this.prisma.lead.count({
-          where: {
-            ...baseWhere,
-            status: 'FOLLOW_UP',
-            nextFollowUpAt: { gte: todayStart, lte: todayEnd },
-          },
-        }),
-      ]);
+    const [totalLeads, followUps, completed, todayCalls] = await Promise.all([
+      // Total Leads
+      this.prisma.lead.count({
+        where: { ...baseWhere },
+      }),
+      // Leads with FOLLOW_UP status
+      this.prisma.lead.count({
+        where: {
+          ...baseWhere,
+          status: 'FOLLOW_UP',
+        },
+      }),
+      // Leads with COMPLETED status
+      this.prisma.lead.count({
+        where: {
+          ...baseWhere,
+          status: 'COMPLETED',
+        },
+      }),
+      // Calls made today (filtered by mobileId isolation)
+      this.prisma.callLog.count({
+        where: {
+          ...(user.userType === 'MOBILE'
+            ? { callerId: user.id }
+            : { lead: { ...baseWhere } }),
+          createdAt: { gte: todayStart, lte: todayEnd },
+        },
+      }),
+    ]);
 
     // 2. Fetch All Follow-up Tasks (Top 10)
     const rawFollowUpTasks = await this.prisma.lead.findMany({
@@ -104,7 +111,7 @@ export class MobileDashboardService {
     return {
       welcome: {
         name: user.name || user.username || 'User',
-        summary: `You have ${todayFollowUpCount} follow-ups today.`,
+        summary: `You have ${followUps} pending follow-ups.`,
         privacyPolicyUrl: 'https://scapital.in/privacy-policy',
         termsConditionUrl: 'https://scapital.in/terms',
         userNumber: user.mobileNumber || 'N/A',
