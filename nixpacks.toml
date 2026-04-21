@@ -1,0 +1,31 @@
+# nixpacks.toml - Nixpacks configuration for NestJS + Prisma + MariaDB
+
+# Environment variables for the build
+[variables]
+NODE_ENV = 'production'
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = 'true'
+PUPPETEER_EXECUTABLE_PATH = '/usr/bin/chromium'
+
+# Setup phase - Install system packages
+[phases.setup]
+# Extend default Node.js packages with Chromium and dependencies for Puppeteer/PDF generation
+nixPkgs = ['...', 'chromium', 'nss', 'freetype', 'harfbuzz', 'ca-certificates', 'ttf-freefont']
+
+# Install phase - Install Node dependencies and generate Prisma Client
+[phases.install]
+cmds = [
+  'yarn install --frozen-lockfile --production=false',
+  'npx prisma generate'
+]
+# Cache node_modules to speed up subsequent builds
+cacheDirectories = ['node_modules']
+
+# Build phase - Compile the NestJS application
+[phases.build]
+cmds = ['yarn build']
+
+# Start phase - Run migrations then start the application
+[start]
+# This command runs migrations before starting the app
+# If migrations fail, the app won't start (due to &&)
+cmd = 'sh -c "yarn prisma migrate deploy && yarn start:prod"'
