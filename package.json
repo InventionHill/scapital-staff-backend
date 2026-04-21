@@ -27,6 +27,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "3.817.0",
     "@aws-sdk/lib-storage": "3.817.0",
+    "@aws-sdk/s3-request-presigner": "^3.1033.0",
     "@langchain/community": "^0.3.57",
     "@langchain/core": "^0.3.78",
     "@langchain/langgraph": "^0.4.9",
@@ -44,7 +45,7 @@
     "@nestjs/schedule": "^4.1.2",
     "@nestjs/serve-static": "^4.0.0",
     "@nestjs/swagger": "^11.0.3",
-    "@prisma/client": "5.9.1",
+    "@prisma/client": "^5.9.1",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.6.7",
     "bcryptjs": "^2.4.3",

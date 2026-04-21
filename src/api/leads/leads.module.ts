@@ -5,11 +5,12 @@ import { PrismaModule } from '../../prisma/prisma.module';
 import { PdfService } from './pdf.service';
 
 import { ConfigModule } from '@nestjs/config';
+import { S3Service } from './s3.service';
 
 @Module({
   imports: [PrismaModule, ConfigModule],
   controllers: [LeadsController],
-  providers: [LeadsService, PdfService],
-  exports: [LeadsService],
+  providers: [LeadsService, PdfService, S3Service],
+  exports: [LeadsService, S3Service],
 })
 export class LeadsModule {}

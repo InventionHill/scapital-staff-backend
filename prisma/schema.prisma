@@ -112,6 +112,7 @@ model ApplicationForm {
 
   references    Json?    // Array of { name, phoneNumber }
   coApplicants  Json?    // Array of { name, phoneNumber, email, motherName }
+  pdfUrl        String?  @db.Text
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

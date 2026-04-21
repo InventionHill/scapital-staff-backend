@@ -27,4 +27,8 @@ export class CreateManualLeadDto {
   @IsString()
   @IsOptional()
   loanTypeId?: string;
+
+  @IsString()
+  @IsOptional()
+  assignedToId?: string;
 }
