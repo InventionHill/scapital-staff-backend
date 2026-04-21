@@ -15,20 +15,30 @@ export class LoanTypesService {
   async create(createLoanTypeDto: CreateLoanTypeDto, userId: string) {
     if (!userId) throw new UnauthorizedException('User identifier missing');
     try {
-      await this.prisma.loanType.create({
+      const loanType = await this.prisma.loanType.create({
         data: {
           name: createLoanTypeDto.name,
           createdBy: userId,
-          documents: {
-            create:
-              createLoanTypeDto.documents?.map((doc) => ({
-                name: doc.name,
-                description: doc.description,
-              })) || [],
-          },
         },
-        include: { documents: true },
       });
+
+      // Create documents sequentially to preserve order via createdAt
+      if (
+        createLoanTypeDto.documents &&
+        createLoanTypeDto.documents.length > 0
+      ) {
+        for (const doc of createLoanTypeDto.documents) {
+          await this.prisma.loanDocument.create({
+            data: {
+              name: doc.name,
+              description: doc.description,
+              loanTypeId: loanType.id,
+            },
+          });
+        }
+      }
+
+      return loanType;
     } catch (error) {
       if (error.code === 'P2002') {
         throw new ConflictException('Loan type with this name already exists');
@@ -59,7 +69,9 @@ export class LoanTypesService {
       },
       orderBy: { createdAt: 'desc' },
       include: {
-        documents: true,
+        documents: {
+          orderBy: { createdAt: 'asc' },
+        },
         _count: {
           select: { leads: true },
         },
@@ -87,7 +99,9 @@ export class LoanTypesService {
         createdBy: targetAdminId, // Strict isolation
       },
       include: {
-        documents: true,
+        documents: {
+          orderBy: { createdAt: 'asc' },
+        },
         _count: {
           select: { leads: true },
         },
@@ -110,25 +124,55 @@ export class LoanTypesService {
       return await this.prisma.$transaction(async (tx) => {
         // If documents are provided, we replace the entire list to stay in sync with UI
         if (updateLoanTypeDto.documents) {
+          const providedIds = updateLoanTypeDto.documents
+            .map((d) => (d as any).id)
+            .filter((id) => !!id);
+
+          // Delete documents not in the provided request
           await tx.loanDocument.deleteMany({
-            where: { loanTypeId: id },
+            where: {
+              loanTypeId: id,
+              id: { notIn: providedIds },
+            },
           });
+
+          // Update existing or create new sequentially
+          for (const doc of updateLoanTypeDto.documents) {
+            const docId = (doc as any).id;
+            if (docId) {
+              await tx.loanDocument.update({
+                where: { id: docId },
+                data: {
+                  name: doc.name,
+                  description: doc.description,
+                },
+              });
+            } else {
+              await tx.loanDocument.create({
+                data: {
+                  name: doc.name,
+                  description: doc.description,
+                  loanTypeId: id,
+                },
+              });
+            }
+          }
         }
 
-        return await tx.loanType.update({
+        await tx.loanType.update({
           where: { id },
           data: {
             ...(updateLoanTypeDto.name && { name: updateLoanTypeDto.name }),
-            ...(updateLoanTypeDto.documents && {
-              documents: {
-                create: updateLoanTypeDto.documents.map((doc) => ({
-                  name: doc.name,
-                  description: doc.description,
-                })),
-              },
-            }),
           },
-          include: { documents: true },
+        });
+
+        return await tx.loanType.findUnique({
+          where: { id },
+          include: {
+            documents: {
+              orderBy: { createdAt: 'asc' },
+            },
+          },
         });
       });
     } catch (error) {

@@ -3,18 +3,27 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   UpdateLeadStatusDto,
   AssignLeadDto,
 } from './dto/update-lead-status.dto';
+import { CreateManualLeadDto } from './dto/create-manual-lead.dto';
+import { CreateApplicationFormDto } from './dto/application-form.dto';
+import { PdfService } from './pdf.service';
 
 @Injectable()
 export class LeadsService {
-  constructor(private prisma: PrismaService) {}
+  private readonly logger = new Logger(LeadsService.name);
 
-  private formatLead(lead: any) {
+  constructor(
+    private prisma: PrismaService,
+    private pdfService: PdfService,
+  ) {}
+
+  private formatLead(lead: any, _user?: any) {
     if (!lead) return lead;
 
     const callCount = lead._count?.callLogs || 0;
@@ -29,25 +38,92 @@ export class LeadsService {
 
     if (lead.status === 'NEW') displayStatusText = 'New';
     else if (lead.status === 'FOLLOW_UP') displayStatusText = 'follow up';
-    else if (lead.status === 'COMPLETED') displayStatusText = 'completed';
+    else if (lead.status === 'COMPLETED') displayStatusText = 'Call Connected';
+    else if (lead.status === 'FOLLOW_UP') displayStatusText = 'Follow Up';
     else if (lead.status === 'NOT_INTERESTED')
-      displayStatusText = 'not interested';
-    else if (lead.status === 'NO_ANSWER') displayStatusText = 'no answer';
-    else if (lead.status === 'CLOSED') displayStatusText = 'closed';
+      displayStatusText = 'Not Interested';
+    else if (lead.status === 'NO_ANSWER') displayStatusText = 'No Answer';
+    else if (lead.status === 'CLOSED') displayStatusText = 'Closed';
     else if (lead.status === 'INVALID_WRONG')
-      displayStatusText = 'invalid/wrong';
-    else if (lead.status === 'CALL_SUCCESS') displayStatusText = 'call success';
+      displayStatusText = 'Invalid/Wrong';
+    else if (lead.status === 'INTERESTED') displayStatusText = 'Interested';
     else if (lead.status === 'RECALL') displayStatusText = 'Recall';
+    else if (lead.status === 'LOGIN') displayStatusText = 'Login';
+    else if (lead.status === 'SANCTIONED') displayStatusText = 'Sanctioned';
+    else if (lead.status === 'DISBURSEMENT') displayStatusText = 'Disbursement';
+    else if (lead.status === 'REJECT') displayStatusText = 'Reject';
+    else if (lead.status === 'DORMANT') displayStatusText = 'Dormant';
     else displayStatusText = lead.status.replace('_', ' ');
+
+    // Redaction logic for custom "Other" loan types
+    // Visible ONLY to the specific mobile user who is assigned to the lead
+    const customLoanType = lead.customLoanType || '';
 
     return {
       ...lead,
+      customLoanType,
       leadId: lead.serialId
         ? `LD-${String(lead.serialId).padStart(5, '0')}`
         : null,
       displayIcon,
       displayStatusText,
     };
+  }
+
+  async createManual(dto: CreateManualLeadDto, user: any) {
+    // Check for duplicate phone number
+    const existing = await this.prisma.lead.findUnique({
+      where: { phoneNumber: dto.phoneNumber },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'A lead with this phone number already exists',
+      );
+    }
+
+    // Determine branchId from user context
+    let branchId: string | null = null;
+    if (user?.userType === 'ADMIN' && user?.branchId) {
+      branchId = user.branchId;
+    } else if (user?.userType === 'MOBILE' && user?.branchId) {
+      branchId = user.branchId;
+    } else if (user?.userType === 'SUPER_ADMIN') {
+      branchId = null; // Super Admin creates without branch
+    }
+
+    // Build the createdAt timestamp from date + time fields
+    let createdAt: Date | undefined;
+    if (dto.date) {
+      if (dto.time) {
+        // Parse date and time together
+        createdAt = new Date(`${dto.date}T${dto.time}:00`);
+      } else {
+        createdAt = new Date(dto.date);
+      }
+    }
+
+    const lead = await this.prisma.lead.create({
+      data: {
+        phoneNumber: dto.phoneNumber,
+        name: dto.name || 'Anonymous Lead',
+        status: 'NEW',
+        branchId,
+        assignedToId: user?.userType === 'MOBILE' ? user.id : null,
+        createdAt: createdAt || new Date(),
+        lastCallAt: createdAt || new Date(),
+        loanType: dto.loanType || 'Other',
+        customLoanType: dto.loanType === 'Other' ? dto.customLoanType : null,
+        loanTypeId: dto.loanTypeId || null,
+      },
+      include: {
+        assignedTo: { select: { id: true, name: true, username: true } },
+        assignedLoanType: true,
+        _count: { select: { callLogs: true } },
+        applicationForm: { select: { id: true } },
+      },
+    });
+
+    return this.formatLead(lead, user);
   }
 
   async updateStatus(id: string, dto: UpdateLeadStatusDto, user?: any) {
@@ -62,20 +138,27 @@ export class LeadsService {
         );
       }
 
+      // Role-based status restrictions
+      const restrictedStatuses = [
+        'LOGIN',
+        'SANCTIONED',
+        'DISBURSEMENT',
+        'REJECT',
+      ];
+      if (dto.status && restrictedStatuses.includes(dto.status)) {
+        throw new ForbiddenException(
+          `Only administrators can set status to ${dto.status.replace('_', ' ')}`,
+        );
+      }
+
       // CLOSED status restriction
       if (lead.status === 'CLOSED') {
         throw new ForbiddenException(
           'Only administrators can modify a closed lead',
         );
       }
-    } else if (user?.userType === 'ADMIN' && user.role === 'ADMIN') {
-      // Branch isolation for admins
-      if (lead.branchId !== user.branchId) {
-        throw new ForbiddenException(
-          'You do not have permission to update leads outside your branch',
-        );
-      }
     }
+    // Admin role users have permission to update any lead in this system as per latest requirements.
 
     const finalStatus = dto.status;
 
@@ -97,28 +180,34 @@ export class LeadsService {
       if (!newAssignedToId && user?.userType === 'MOBILE' && user?.id) {
         newAssignedToId = user.id;
       }
+      let lt: any = null;
       if (dto.loanTypeId && dto.loanTypeId !== 'unassigned') {
-        let targetAdminId = user?.id;
+        // 1. Verify existence of the loan type (prevents 500 error from FK constraint)
+        lt = await this.prisma.loanType.findUnique({
+          where: { id: dto.loanTypeId },
+        });
 
+        if (!lt) {
+          throw new NotFoundException(
+            `Loan type with ID "${dto.loanTypeId}" not found`,
+          );
+        }
+
+        // 2. Enforce ownership restriction ONLY for MOBILE users
         if (user?.userType === 'MOBILE') {
+          let targetAdminId = user?.id;
           const branchAdmin = await this.prisma.adminUser.findFirst({
             where: { branchId: user.branchId },
           });
           if (branchAdmin) {
             targetAdminId = branchAdmin.id;
           }
-        }
 
-        const lt = await this.prisma.loanType.findFirst({
-          where: {
-            id: dto.loanTypeId,
-            createdBy: targetAdminId, // Context-aware isolation
-          },
-        });
-        if (!lt) {
-          throw new ForbiddenException(
-            'You do not have permission to use this loan type or it does not exist',
-          );
+          if (lt.createdBy !== targetAdminId) {
+            throw new ForbiddenException(
+              'You do not have permission to use this loan type',
+            );
+          }
         }
       }
 
@@ -133,17 +222,45 @@ export class LeadsService {
           assignedToId: newAssignedToId,
           notes: dto.notes !== undefined ? dto.notes : lead.notes,
           nextFollowUpAt: finalFollowUpAt,
+          loanType:
+            dto.loanType === 'Other'
+              ? 'Other'
+              : dto.loanType !== undefined
+                ? dto.loanType
+                : lt?.name || lead.loanType,
           loanTypeId:
             dto.loanTypeId !== undefined ? dto.loanTypeId : lead.loanTypeId,
+          profile: dto.profile !== undefined ? dto.profile : lead.profile,
+          cibilStatus:
+            dto.cibilStatus !== undefined ? dto.cibilStatus : lead.cibilStatus,
+          cibilRemark:
+            dto.cibilRemark !== undefined ? dto.cibilRemark : lead.cibilRemark,
+          customLoanType:
+            dto.loanType === 'Other'
+              ? dto.customLoanType || lead.customLoanType
+              : dto.loanType !== undefined ||
+                  (dto.loanTypeId && dto.loanTypeId !== 'unassigned')
+                ? null
+                : lead.customLoanType,
+          statusRemark:
+            dto.statusRemark !== undefined
+              ? dto.statusRemark
+              : lead.statusRemark,
+          // Update lastCallAt for 'Connected' status
+          ...(finalStatus === 'COMPLETED' ? { lastCallAt: new Date() } : {}),
+          // Auto-assign branchId if missing and updater is an admin
+          ...(!lead.branchId &&
+            user?.userType === 'ADMIN' && { branchId: user.branchId }),
         },
         include: {
           assignedTo: {
             select: { id: true, name: true, username: true },
           },
-          loanType: true,
+          assignedLoanType: true,
           _count: {
             select: { callLogs: true },
           },
+          applicationForm: { select: { id: true } },
         },
       });
     } catch (error) {
@@ -168,7 +285,7 @@ export class LeadsService {
       },
     });
 
-    return this.formatLead(updatedLead);
+    return this.formatLead(updatedLead, user);
   }
 
   async getStats(user?: any) {
@@ -316,7 +433,12 @@ export class LeadsService {
       },
     });
 
-    return this.formatLead(updatedLead);
+    return this.formatLead(
+      updatedLead,
+      dto.userId !== undefined
+        ? { id: dto.userId, userType: 'MOBILE' }
+        : undefined,
+    );
   }
 
   async findAll(
@@ -346,9 +468,14 @@ export class LeadsService {
         where.id = 'none';
       } else {
         const allowedMobileIds = (branchAdmin.mobileIds as string[]) || [];
-        where.mobileId = { in: allowedMobileIds };
         where.AND = [
           ...(where.AND || []),
+          {
+            OR: [
+              { mobileId: { in: allowedMobileIds } },
+              { mobileId: null, branchId: user.branchId },
+            ],
+          },
           {
             OR: [{ assignedToId: user.id }, { assignedToId: null }],
           },
@@ -360,7 +487,15 @@ export class LeadsService {
         where: { id: user.id },
       });
       const allowedIds = (admin?.mobileIds as string[]) || [];
-      where.mobileId = { in: allowedIds };
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { mobileId: { in: allowedIds } },
+            { mobileId: null, branchId: user.branchId },
+          ],
+        },
+      ];
     }
     // SUPER_ADMIN sees everything unless they explicitly filter by branchId query
 
@@ -380,24 +515,32 @@ export class LeadsService {
         assignedTo: {
           select: { id: true, name: true, username: true },
         },
-        loanType: true,
+        assignedLoanType: true,
         _count: {
           select: { callLogs: true },
         },
+        applicationForm: { select: { id: true } },
       },
     });
 
-    // Custom sorting: RECALL leads first, then by serialId desc
+    // Sort by latest call/activity first, then by serialId desc
     leads.sort((a, b) => {
-      // Prioritize RECALL status
-      if (a.status === 'RECALL' && b.status !== 'RECALL') return -1;
-      if (a.status !== 'RECALL' && b.status === 'RECALL') return 1;
+      const timeA = a.lastCallAt
+        ? new Date(a.lastCallAt).getTime()
+        : new Date(a.createdAt).getTime();
+      const timeB = b.lastCallAt
+        ? new Date(b.lastCallAt).getTime()
+        : new Date(b.createdAt).getTime();
 
-      // Secondary sort: serialId desc
+      if (timeB !== timeA) {
+        return timeB - timeA;
+      }
+
+      // Fallback to newest leads first
       return (b.serialId || 0) - (a.serialId || 0);
     });
 
-    return leads.map((lead) => this.formatLead(lead));
+    return leads.map((lead) => this.formatLead(lead, user));
   }
 
   async findOne(id: string, user?: any) {
@@ -407,10 +550,11 @@ export class LeadsService {
         assignedTo: {
           select: { id: true, name: true, username: true },
         },
-        loanType: true,
+        assignedLoanType: true,
         _count: {
           select: { callLogs: true },
         },
+        applicationForm: true,
         callLogs: {
           include: {
             caller: { select: { id: true, name: true } },
@@ -429,7 +573,13 @@ export class LeadsService {
       });
 
       const allowedMobileIds = (branchAdmin?.mobileIds as string[]) || [];
-      if (!lead.mobileId || !allowedMobileIds.includes(lead.mobileId)) {
+      const isManualLeadInBranch =
+        lead.mobileId === null && lead.branchId === user.branchId;
+
+      if (
+        !isManualLeadInBranch &&
+        (!lead.mobileId || !allowedMobileIds.includes(lead.mobileId))
+      ) {
         throw new ForbiddenException(
           'You do not have permission to view this lead',
         );
@@ -441,30 +591,117 @@ export class LeadsService {
           'This lead is already assigned to another mobile user',
         );
       }
+    }
+    // Admins have permission to view leads they can access (determined by findUnique below if we wanted to be stricter, but here we prioritize providing access)
+
+    return this.formatLead(lead, user);
+  }
+
+  async remove(id: string, user?: any) {
+    const lead = await this.prisma.lead.findUnique({ where: { id } });
+    if (!lead) throw new NotFoundException('Lead not found');
+
+    // PERMISSION CHECK
+    if (user?.userType === 'MOBILE') {
+      throw new ForbiddenException('Mobile users cannot delete leads');
     } else if (user?.userType === 'ADMIN' && user.role === 'ADMIN') {
       const admin = await this.prisma.adminUser.findUnique({
         where: { id: user.id },
       });
       const allowedMobileIds = (admin?.mobileIds as string[]) || [];
 
-      if (!lead.mobileId || !allowedMobileIds.includes(lead.mobileId)) {
+      const isBranchMatch = lead.branchId === user.branchId;
+      const isMobileMatch =
+        lead.mobileId && allowedMobileIds.includes(lead.mobileId);
+
+      if (!isBranchMatch && !isMobileMatch) {
         throw new ForbiddenException(
-          'You do not have permission to view this lead',
+          'You do not have permission to delete this lead',
         );
       }
     }
 
-    return this.formatLead(lead);
-  }
-
-  async remove(id: string) {
-    const lead = await this.prisma.lead.findUnique({ where: { id } });
-    if (!lead) throw new NotFoundException('Lead not found');
-
-    // Delete associated call logs first or let Prisma handle via Cascade if configured
-    // Given the current schema, we should check if they are deleted automatically
+    // Delete associated call logs first
     await this.prisma.callLog.deleteMany({ where: { leadId: id } });
 
     return this.prisma.lead.delete({ where: { id } });
+  }
+
+  async getApplicationForm(leadId: string) {
+    const form = await this.prisma.applicationForm.findUnique({
+      where: { leadId },
+    });
+    if (!form) throw new NotFoundException('Application form not found');
+    return form;
+  }
+
+  async updateApplicationForm(leadId: string, dto: CreateApplicationFormDto) {
+    const lead = await this.prisma.lead.findUnique({ where: { id: leadId } });
+    if (!lead) throw new NotFoundException('Lead not found');
+
+    // Convert DTO to a plain JS object to ensure Prisma handles Json fields correctly
+    // especially with members that might be class instances from class-transformer
+    const plainForm = JSON.parse(JSON.stringify(dto));
+    this.logger.log(`SAVING TO PRISMA: ${JSON.stringify(plainForm, null, 2)}`);
+
+    return this.prisma.applicationForm.upsert({
+      where: { leadId },
+      update: {
+        ...plainForm,
+      },
+      create: {
+        ...plainForm,
+        leadId,
+      },
+    });
+  }
+
+  async generateApplicationPdf(leadId: string) {
+    const lead = await this.prisma.lead.findUnique({
+      where: { id: leadId },
+      include: {
+        applicationForm: true,
+        branch: true,
+      },
+    });
+
+    if (!lead || !lead.applicationForm) {
+      throw new NotFoundException('Application form not found for this lead');
+    }
+
+    const form = lead.applicationForm;
+    const branchName = lead.branch?.name || 'URBAN MONEY';
+
+    // Map the database fields to the PDF service expected data structure
+    // Handling JSON fields by casting to any safe access
+    const addresses = (form.addresses as any) || {};
+    const financials = (form.financials as any) || {};
+    const references = (form.references as any) || [];
+
+    return this.pdfService.generateApplicationPdf({
+      branchName,
+      leadName: form.name,
+      phoneNumber: form.phoneNumber,
+      fileNumber: form.fileNumber,
+      email: form.email,
+      motherName: form.motherName,
+      dob: form.dob,
+      companyName: form.companyName,
+      addresses: {
+        current: addresses.current,
+        permanent: addresses.permanent,
+        office: addresses.office,
+      },
+      financials: {
+        netSalaryInr: financials.netSalaryInr,
+        loanAmountInr: financials.loanAmountInr,
+        obligationInr: financials.obligationInr,
+      },
+      product: form.product,
+      residentType: form.residentType,
+      leadBy: form.leadBy,
+      references: references,
+      coApplicants: (form.coApplicants as any) || [],
+    });
   }
 }

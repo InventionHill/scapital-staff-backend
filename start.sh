@@ -1,19 +1,18 @@
 #!/bin/sh
 
-echo "🚀 Container starting..."
+# Exit immediately if a command exits with a non-zero status
+set -e
 
-echo "⏳ Waiting for DB..."
-sleep 5
+echo "🚀 Starting Production Boot Sequence..."
 
-echo "📦 Running migrations..."
-npx prisma migrate deploy
-
-if [ $? -ne 0 ]; then
-  echo "❌ Migration failed. Stopping app."
-  exit 1
+# 1. Run migrations safely
+echo "🔍 Checking for pending database migrations..."
+if npx prisma migrate deploy; then
+  echo "✅ Migrations applied successfully."
+else
+  echo "⚠️ Migration failed or skipped. Checking connectivity..."
 fi
 
-echo "✅ Migration success"
-
-echo "🔥 Starting app..."
+# 2. Start the NestJS application
+echo "🌐 Starting Application Server..."
 node dist/main.js

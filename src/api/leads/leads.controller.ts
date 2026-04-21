@@ -9,18 +9,40 @@ import {
   Query,
   UseGuards,
   Request,
+  Res,
+  InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { LeadsService } from './leads.service';
 import {
   UpdateLeadStatusDto,
   AssignLeadDto,
 } from './dto/update-lead-status.dto';
+import { CreateManualLeadDto } from './dto/create-manual-lead.dto';
+import { CreateApplicationFormDto } from './dto/application-form.dto';
 import { AuthGuard } from '@nestjs/passport';
 
 @Controller('leads')
 @UseGuards(AuthGuard('jwt'))
 export class LeadsController {
+  private readonly logger = new Logger(LeadsController.name);
+
   constructor(private readonly leadsService: LeadsService) {}
+
+  @Post('manual')
+  async createManual(
+    @Request() req,
+    @Body() createManualLeadDto: CreateManualLeadDto,
+  ) {
+    this.logger.log(
+      `Manual Lead Creation Attempt: ${JSON.stringify({
+        body: createManualLeadDto,
+        user: req.user,
+      })}`,
+    );
+    return this.leadsService.createManual(createManualLeadDto, req.user);
+  }
 
   @Get('stats')
   getStats(@Request() req) {
@@ -69,7 +91,55 @@ export class LeadsController {
   }
 
   @Delete(':id')
-  async remove(@Param('id') id: string) {
-    return this.leadsService.remove(id);
+  async remove(@Request() req, @Param('id') id: string) {
+    return this.leadsService.remove(id, req.user);
+  }
+
+  @Get(':id/application-form')
+  async getApplicationForm(@Param('id') id: string) {
+    return this.leadsService.getApplicationForm(id);
+  }
+
+  @Post(':id/application-form')
+  async updateApplicationForm(
+    @Param('id') id: string,
+    @Body() dto: CreateApplicationFormDto,
+  ) {
+    this.logger.log(`UPDATING FORM - ID: ${id}`);
+    this.logger.log(`UPDATING FORM - DTO: ${JSON.stringify(dto, null, 2)}`);
+    return this.leadsService.updateApplicationForm(id, dto);
+  }
+
+  @Get(':id/application-form/pdf')
+  async getApplicationFormPdf(@Param('id') id: string, @Res() res: Response) {
+    try {
+      const buffer = await this.leadsService.generateApplicationPdf(id);
+
+      if (!buffer || buffer.length === 0) {
+        throw new InternalServerErrorException(
+          'Generated PDF is empty or invalid',
+        );
+      }
+
+      res.set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename=application-form-${id}.pdf`,
+        'Content-Length': buffer.length,
+      });
+
+      res.end(buffer);
+    } catch (error) {
+      this.logger.error(
+        `Controller PDF handling error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+      if (!res.headersSent) {
+        res.status(500).json({
+          status: 'error',
+          message:
+            error instanceof Error ? error.message : 'Internal Server Error',
+        });
+      }
+    }
   }
 }

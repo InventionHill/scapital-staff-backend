@@ -36,6 +36,10 @@ export class NestedCallDto {
   @IsString()
   @IsOptional()
   callerId?: string;
+
+  @IsString()
+  @IsOptional()
+  name?: string;
 }
 
 export class GroupedCreateCallDto {
