@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   UpdateLeadStatusDto,
@@ -21,6 +22,7 @@ export class LeadsService {
   constructor(
     private prisma: PrismaService,
     private pdfService: PdfService,
+    private configService: ConfigService,
   ) {}
 
   private formatLead(lead: any, _user?: any) {
@@ -67,6 +69,7 @@ export class LeadsService {
         : null,
       displayIcon,
       displayStatusText,
+      applicationPdfUrl: `${this.configService.get('URL')}/v1/leads/${lead.id}/application-form/pdf`,
     };
   }
 

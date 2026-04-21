@@ -4,8 +4,10 @@ import { LeadsController } from './leads.controller';
 import { PrismaModule } from '../../prisma/prisma.module';
 import { PdfService } from './pdf.service';
 
+import { ConfigModule } from '@nestjs/config';
+
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, ConfigModule],
   controllers: [LeadsController],
   providers: [LeadsService, PdfService],
   exports: [LeadsService],
