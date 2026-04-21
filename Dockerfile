@@ -47,13 +47,14 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV NODE_ENV=production
 
 # Copy dependency manifests
-COPY package.json yarn.lock ./
+COPY package.json yarn.lock start.sh ./
 COPY prisma ./prisma/
 
 # Install production dependencies only
 RUN yarn install --frozen-lockfile --production && \
     npx prisma generate && \
-    yarn cache clean
+    yarn cache clean && \
+    chmod +x start.sh
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
@@ -62,4 +63,4 @@ COPY --from=builder /app/dist ./dist
 EXPOSE 3000
 
 # Start the application
-CMD ["sh", "-c", "npx prisma db push --accept-data-loss && node dist/main.js"]
+CMD ["./start.sh"]

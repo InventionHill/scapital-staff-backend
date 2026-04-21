@@ -51,4 +51,8 @@ export class CreateCallDto {
   @IsString()
   @IsOptional()
   mobileName?: string;
+
+  @IsString()
+  @IsOptional()
+  name?: string;
 }

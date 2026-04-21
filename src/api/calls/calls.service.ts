@@ -40,6 +40,7 @@ export class CallsService {
       lead = await this.prisma.lead.create({
         data: {
           phoneNumber: dto.phoneNumber,
+          name: (dto as any).name || 'Anonymous Lead',
           status: 'NEW',
           assignedToId: dto.callerId, // Auto-assign to the first person who handled it
           createdAt: callTime ? new Date(callTime) : undefined,
@@ -71,6 +72,15 @@ export class CallsService {
 
       if (!lead.mobileId && dto.mobileId) {
         updateData.mobileId = dto.mobileId;
+      }
+
+      // If lead exists but has no name or is "Anonymous Lead", update it if we have a contact name
+      const incomingContactName = (dto as any).name;
+      if (
+        incomingContactName &&
+        (!lead.name || lead.name === 'Anonymous Lead')
+      ) {
+        updateData.name = incomingContactName;
       }
 
       if (Object.keys(updateData).length > 0) {
@@ -190,9 +200,7 @@ export class CallsService {
     page: number = 1,
     limit: number = 10,
   ) {
-    const where: any = {
-      callLogs: { some: {} }, // Ensure lead has at least one call log
-    };
+    const where: any = {};
 
     // BRANCH & MOBILE ID ISOLATION
     if (user?.userType === 'ADMIN' && user?.role === 'ADMIN') {
@@ -201,7 +209,15 @@ export class CallsService {
         where: { id: user.id },
       });
       const allowedIds = (admin?.mobileIds as string[]) || [];
-      where.mobileId = { in: allowedIds };
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { mobileId: { in: allowedIds } },
+            { mobileId: null, branchId: user.branchId },
+          ],
+        },
+      ];
     } else if (user?.userType === 'MOBILE') {
       // 1. Get the admin for this branch
       const branchAdmin = await this.prisma.adminUser.findUnique({
@@ -212,9 +228,14 @@ export class CallsService {
         where.id = 'none';
       } else {
         const allowedMobileIds = (branchAdmin.mobileIds as string[]) || [];
-        where.mobileId = { in: allowedMobileIds };
         where.AND = [
           ...(where.AND || []),
+          {
+            OR: [
+              { mobileId: { in: allowedMobileIds } },
+              { mobileId: null, branchId: user.branchId },
+            ],
+          },
           {
             OR: [{ assignedToId: user.id }, { assignedToId: null }],
           },
@@ -268,10 +289,20 @@ export class CallsService {
       this.prisma.lead.count({ where }),
     ]);
 
-    // Custom sorting: RECALL leads first, then by serialId desc for the rest
+    // Sort by latest call/activity first, then by serialId desc
     allLeads.sort((a, b) => {
-      if (a.status === 'RECALL' && b.status !== 'RECALL') return -1;
-      if (a.status !== 'RECALL' && b.status === 'RECALL') return 1;
+      const timeA = a.lastCallAt
+        ? new Date(a.lastCallAt).getTime()
+        : new Date(a.createdAt).getTime();
+      const timeB = b.lastCallAt
+        ? new Date(b.lastCallAt).getTime()
+        : new Date(b.createdAt).getTime();
+
+      if (timeB !== timeA) {
+        return timeB - timeA;
+      }
+
+      // Fallback to newest leads first
       return (b.serialId || 0) - (a.serialId || 0);
     });
 
@@ -290,7 +321,7 @@ export class CallsService {
         outcome: latestCall?.outcome || lead.status,
         notes: latestCall?.notes,
         leadId: lead.id,
-        caller: latestCall?.caller || latestCall?.admin || lead.assignedTo,
+        caller: lead.assignedTo || latestCall?.caller,
         lead: {
           status: lead.status,
           name: lead.name,
@@ -310,9 +341,7 @@ export class CallsService {
     search?: string,
     status?: string,
   ) {
-    const where: any = {
-      callLogs: { some: {} },
-    };
+    const where: any = {};
 
     // MOBILE ID ISOLATION (consistent with findAll)
     if (user?.userType === 'ADMIN' && user?.role === 'ADMIN') {
@@ -320,7 +349,15 @@ export class CallsService {
         where: { id: user.id },
       });
       const allowedIds = (admin?.mobileIds as string[]) || [];
-      where.mobileId = { in: allowedIds };
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { mobileId: { in: allowedIds } },
+            { mobileId: null, branchId: user.branchId },
+          ],
+        },
+      ];
     } else if (user?.userType === 'MOBILE') {
       const branchAdmin = await this.prisma.adminUser.findUnique({
         where: { branchId: user.branchId },
@@ -330,9 +367,14 @@ export class CallsService {
         where.id = 'none';
       } else {
         const allowedMobileIds = (branchAdmin.mobileIds as string[]) || [];
-        where.mobileId = { in: allowedMobileIds };
         where.AND = [
           ...(where.AND || []),
+          {
+            OR: [
+              { mobileId: { in: allowedMobileIds } },
+              { mobileId: null, branchId: user.branchId },
+            ],
+          },
           {
             OR: [{ assignedToId: user.id }, { assignedToId: null }],
           },
@@ -414,9 +456,7 @@ export class CallsService {
         }),
         status: lead.status || 'Not Linked',
         type: latestCall?.callType || '---',
-        agent:
-          (latestCall?.caller || latestCall?.admin || lead.assignedTo)?.name ||
-          'Unassigned',
+        agent: (lead.assignedTo || latestCall?.caller)?.name || 'Unassigned',
       });
     });
 

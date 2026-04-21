@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 import axios from 'axios';
 
-// Using IPv4 localhost to avoid node 17+ IPv6 issues if any
+// Using IPv4 localhost to avoid node 17+ IPv6 ISSUED if any
 const BASE_URL = 'http://127.0.0.1:8000/api';
 
 async function verifyApis() {

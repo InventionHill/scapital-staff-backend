@@ -26,6 +26,10 @@ export class UpdateLeadStatusDto {
 
   @IsString()
   @IsOptional()
+  statusRemark?: string;
+
+  @IsString()
+  @IsOptional()
   assignedToId?: string;
 
   @IsDateString()
@@ -39,6 +43,26 @@ export class UpdateLeadStatusDto {
   @IsString()
   @IsOptional()
   branchId?: string;
+
+  @IsString()
+  @IsOptional()
+  profile?: string;
+
+  @IsString()
+  @IsOptional()
+  cibilStatus?: string;
+
+  @IsString()
+  @IsOptional()
+  cibilRemark?: string;
+
+  @IsString()
+  @IsOptional()
+  loanType?: string;
+
+  @IsString()
+  @IsOptional()
+  customLoanType?: string;
 }
 
 export class AssignLeadDto {

@@ -9,6 +9,10 @@ import { Type } from 'class-transformer';
 
 class LoanDocumentDto {
   @IsString()
+  @IsOptional()
+  id?: string;
+
+  @IsString()
   @IsNotEmpty()
   name: string;
 

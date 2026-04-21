@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE `leads` MODIFY `serialId` INTEGER NULL AUTO_INCREMENT;
