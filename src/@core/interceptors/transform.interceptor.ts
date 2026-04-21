@@ -4,6 +4,7 @@ import {
   ExecutionContext,
   CallHandler,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
 
@@ -16,12 +17,23 @@ export interface Response<T> {
 @Injectable()
 export class TransformInterceptor<T> implements NestInterceptor<
   T,
-  Response<T>
+  Response<T> | T
 > {
+  constructor(private readonly reflector: Reflector) {}
+
   intercept(
     context: ExecutionContext,
     next: CallHandler,
-  ): Observable<Response<T>> {
+  ): Observable<Response<T> | T> {
+    const skipTransform = this.reflector.get<boolean>(
+      'keep-raw-response',
+      context.getHandler(),
+    );
+
+    if (skipTransform) {
+      return next.handle();
+    }
+
     const request = context.switchToHttp().getRequest();
     const method = request.method;
 

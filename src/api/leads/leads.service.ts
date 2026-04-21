@@ -14,18 +14,23 @@ import {
 import { CreateManualLeadDto } from './dto/create-manual-lead.dto';
 import { CreateApplicationFormDto } from './dto/application-form.dto';
 import { PdfService } from './pdf.service';
+import { S3Service } from './s3.service';
 
 @Injectable()
 export class LeadsService {
   private readonly logger = new Logger(LeadsService.name);
+  private prisma: any;
 
   constructor(
-    private prisma: PrismaService,
+    prisma: PrismaService,
     private pdfService: PdfService,
     private configService: ConfigService,
-  ) {}
+    private s3Service: S3Service,
+  ) {
+    this.prisma = prisma;
+  }
 
-  private formatLead(lead: any, _user?: any) {
+  private async formatLead(lead: any, _user?: any) {
     if (!lead) return lead;
 
     const callCount = lead._count?.callLogs || 0;
@@ -61,7 +66,7 @@ export class LeadsService {
     // Visible ONLY to the specific mobile user who is assigned to the lead
     const customLoanType = lead.customLoanType || '';
 
-    return {
+    const formatted: any = {
       ...lead,
       customLoanType,
       leadId: lead.serialId
@@ -69,8 +74,50 @@ export class LeadsService {
         : null,
       displayIcon,
       displayStatusText,
-      applicationPdfUrl: `${this.configService.get('URL')}/v1/leads/${lead.id}/application-form/pdf`,
+      name: lead.name || '',
     };
+
+    // Use the S3 Service to generate a secure presigned URL instead of a localhost proxy
+    if (formatted.applicationForm && formatted.applicationForm.pdfUrl) {
+      try {
+        const fileName = `application_form_${formatted.id}.pdf`;
+        const presignedUrl = await this.s3Service.getPresignedUrl(fileName);
+        formatted.applicationForm.pdfUrl = presignedUrl;
+        this.logger.log(
+          `>> [DEBUG] S3 Presigned URL Generated: ${presignedUrl}`,
+        );
+      } catch (e) {
+        this.logger.error(
+          `Failed to generate presigned URL for ${formatted.id}`,
+        );
+      }
+    }
+
+    return formatted;
+  }
+
+  async getApplicationFormPdf(leadId: string): Promise<Buffer> {
+    const lead = await (this.prisma as any).lead.findUnique({
+      where: { id: leadId },
+      include: { applicationForm: true },
+    });
+
+    if (!lead || !lead.applicationForm) {
+      throw new NotFoundException('Application form not found');
+    }
+
+    // Try to fetch from S3 first to save CPU
+    if (lead.applicationForm.pdfUrl) {
+      try {
+        const fileName = `application_form_${leadId}.pdf`;
+        return await this.s3Service.downloadPdf(fileName);
+      } catch (e) {
+        this.logger.warn(`S3 Fetch failed, re-generating PDF: ${e.message}`);
+      }
+    }
+
+    // Fallback to generation if not in S3
+    return this.generateApplicationPdf(leadId);
   }
 
   async createManual(dto: CreateManualLeadDto, user: any) {
@@ -108,25 +155,33 @@ export class LeadsService {
     const lead = await this.prisma.lead.create({
       data: {
         phoneNumber: dto.phoneNumber,
-        name: dto.name || 'Anonymous Lead',
+        name: dto.name || null,
         status: 'NEW',
         branchId,
-        assignedToId: user?.userType === 'MOBILE' ? user.id : null,
+        assignedToId:
+          user?.userType === 'MOBILE'
+            ? user.id
+            : dto.assignedToId === 'unassigned' || dto.assignedToId === ''
+              ? null
+              : dto.assignedToId || null,
         createdAt: createdAt || new Date(),
         lastCallAt: createdAt || new Date(),
         loanType: dto.loanType || 'Other',
         customLoanType: dto.loanType === 'Other' ? dto.customLoanType : null,
-        loanTypeId: dto.loanTypeId || null,
+        loanTypeId:
+          dto.loanTypeId === 'unassigned' || dto.loanTypeId === ''
+            ? null
+            : dto.loanTypeId || null,
       },
       include: {
         assignedTo: { select: { id: true, name: true, username: true } },
         assignedLoanType: true,
         _count: { select: { callLogs: true } },
-        applicationForm: { select: { id: true } },
+        applicationForm: { select: { id: true, pdfUrl: true } } as any,
       },
     });
 
-    return this.formatLead(lead, user);
+    return await this.formatLead(lead, user);
   }
 
   async updateStatus(id: string, dto: UpdateLeadStatusDto, user?: any) {
@@ -175,7 +230,7 @@ export class LeadsService {
       // Determine new assignment (auto-assign if unassigned and not an admin)
       let newAssignedToId =
         dto.assignedToId !== undefined
-          ? dto.assignedToId === 'unassigned'
+          ? dto.assignedToId === 'unassigned' || dto.assignedToId === ''
             ? null
             : dto.assignedToId
           : lead.assignedToId;
@@ -183,8 +238,17 @@ export class LeadsService {
       if (!newAssignedToId && user?.userType === 'MOBILE' && user?.id) {
         newAssignedToId = user.id;
       }
+
+      // Sanitize loanTypeId to handle placeholder values from frontend
+      const finalLoanTypeId =
+        dto.loanTypeId !== undefined
+          ? dto.loanTypeId === 'unassigned' || dto.loanTypeId === ''
+            ? null
+            : dto.loanTypeId
+          : lead.loanTypeId;
+
       let lt: any = null;
-      if (dto.loanTypeId && dto.loanTypeId !== 'unassigned') {
+      if (finalLoanTypeId) {
         // 1. Verify existence of the loan type (prevents 500 error from FK constraint)
         lt = await this.prisma.loanType.findUnique({
           where: { id: dto.loanTypeId },
@@ -192,7 +256,7 @@ export class LeadsService {
 
         if (!lt) {
           throw new NotFoundException(
-            `Loan type with ID "${dto.loanTypeId}" not found`,
+            `Loan type with ID "${finalLoanTypeId}" not found`,
           );
         }
 
@@ -231,8 +295,7 @@ export class LeadsService {
               : dto.loanType !== undefined
                 ? dto.loanType
                 : lt?.name || lead.loanType,
-          loanTypeId:
-            dto.loanTypeId !== undefined ? dto.loanTypeId : lead.loanTypeId,
+          loanTypeId: finalLoanTypeId,
           profile: dto.profile !== undefined ? dto.profile : lead.profile,
           cibilStatus:
             dto.cibilStatus !== undefined ? dto.cibilStatus : lead.cibilStatus,
@@ -263,7 +326,7 @@ export class LeadsService {
           _count: {
             select: { callLogs: true },
           },
-          applicationForm: { select: { id: true } },
+          applicationForm: { select: { id: true, pdfUrl: true } } as any,
         },
       });
     } catch (error) {
@@ -288,7 +351,7 @@ export class LeadsService {
       },
     });
 
-    return this.formatLead(updatedLead, user);
+    return await this.formatLead(updatedLead, user);
   }
 
   async getStats(user?: any) {
@@ -436,7 +499,7 @@ export class LeadsService {
       },
     });
 
-    return this.formatLead(
+    return await this.formatLead(
       updatedLead,
       dto.userId !== undefined
         ? { id: dto.userId, userType: 'MOBILE' }
@@ -522,9 +585,12 @@ export class LeadsService {
         _count: {
           select: { callLogs: true },
         },
-        applicationForm: { select: { id: true } },
+        applicationForm: { select: { id: true, pdfUrl: true } } as any,
       },
     });
+
+    // 🚀 SELF-HEALING: Repair missing PDFs in the background
+    this.healMissingPdfs(leads);
 
     // Sort by latest call/activity first, then by serialId desc
     leads.sort((a, b) => {
@@ -543,7 +609,7 @@ export class LeadsService {
       return (b.serialId || 0) - (a.serialId || 0);
     });
 
-    return leads.map((lead) => this.formatLead(lead, user));
+    return await Promise.all(leads.map((lead) => this.formatLead(lead, user)));
   }
 
   async findOne(id: string, user?: any) {
@@ -597,7 +663,7 @@ export class LeadsService {
     }
     // Admins have permission to view leads they can access (determined by findUnique below if we wanted to be stricter, but here we prioritize providing access)
 
-    return this.formatLead(lead, user);
+    return await this.formatLead(lead, user);
   }
 
   async remove(id: string, user?: any) {
@@ -635,6 +701,20 @@ export class LeadsService {
       where: { leadId },
     });
     if (!form) throw new NotFoundException('Application form not found');
+
+    if (form.pdfUrl) {
+      try {
+        const presignedUrl = await this.s3Service.getPresignedUrl(
+          `application_form_${leadId}.pdf`,
+        );
+        form.pdfUrl = presignedUrl;
+      } catch (e) {
+        this.logger.error(
+          `Failed to generate presigned URL for form ${leadId}`,
+        );
+      }
+    }
+
     return form;
   }
 
@@ -647,7 +727,7 @@ export class LeadsService {
     const plainForm = JSON.parse(JSON.stringify(dto));
     this.logger.log(`SAVING TO PRISMA: ${JSON.stringify(plainForm, null, 2)}`);
 
-    return this.prisma.applicationForm.upsert({
+    const form = await (this.prisma as any).applicationForm.upsert({
       where: { leadId },
       update: {
         ...plainForm,
@@ -657,10 +737,81 @@ export class LeadsService {
         leadId,
       },
     });
+
+    // 🚀 NEW: Generate and Upload PDF to S3 in the background or immediately
+    try {
+      const pdfBuffer = await this.generateApplicationPdf(leadId);
+      const fileName = `application_form_${leadId}.pdf`;
+      const s3Url = await this.s3Service.uploadPdf(pdfBuffer, fileName);
+
+      // Update the form with the S3 U
+      const updatedForm = await (this.prisma as any).applicationForm.update({
+        where: { id: form.id },
+        data: { pdfUrl: s3Url },
+      });
+
+      try {
+        const presignedUrl = await this.s3Service.getPresignedUrl(fileName);
+        return { ...updatedForm, pdfUrl: presignedUrl };
+      } catch (e) {
+        return { ...updatedForm, pdfUrl: s3Url };
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to handle S3 PDF upload for lead ${leadId}: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      );
+      if (form.pdfUrl) {
+        try {
+          form.pdfUrl = await this.s3Service.getPresignedUrl(
+            `application_form_${leadId}.pdf`,
+          );
+        } catch (e) {}
+      }
+      return form; // Return the form anyway even if PDF upload fails
+    }
+  }
+
+  private async healMissingPdfs(leads: any[]) {
+    const missing = leads.filter(
+      (l) => l.applicationForm && !l.applicationForm.pdfUrl,
+    );
+    if (missing.length === 0) return;
+
+    this.logger.log(
+      `🛠 Found ${missing.length} leads missing PDFs. Repairing in background...`,
+    );
+
+    // Process in background (don't await)
+    missing.forEach((lead) => {
+      this.repairLeadPdf(lead.id).catch((err) =>
+        this.logger.error(
+          `Failed to heal PDF for lead ${lead.id}: ${err.message}`,
+        ),
+      );
+    });
+  }
+
+  private async repairLeadPdf(leadId: string) {
+    try {
+      const pdfBuffer = await this.generateApplicationPdf(leadId);
+      const fileName = `application_form_${leadId}.pdf`;
+      const s3Url = await this.s3Service.uploadPdf(pdfBuffer, fileName);
+
+      await (this.prisma as any).applicationForm.update({
+        where: { leadId },
+        data: { pdfUrl: s3Url },
+      });
+
+      this.logger.log(`✅ Successfully healed PDF for lead ${leadId}`);
+    } catch (error: any) {
+      this.logger.error(
+        `✗ Background repair failed for ${leadId}: ${error.message}`,
+      );
+    }
   }
 
   async generateApplicationPdf(leadId: string) {
-    const lead = await this.prisma.lead.findUnique({
+    const lead = await (this.prisma as any).lead.findUnique({
       where: { id: leadId },
       include: {
         applicationForm: true,
@@ -683,13 +834,13 @@ export class LeadsService {
 
     return this.pdfService.generateApplicationPdf({
       branchName,
+      companyName: branchName, // Map branchName to companyName for the header design
       leadName: form.name,
       phoneNumber: form.phoneNumber,
       fileNumber: form.fileNumber,
       email: form.email,
       motherName: form.motherName,
       dob: form.dob,
-      companyName: form.companyName,
       addresses: {
         current: addresses.current,
         permanent: addresses.permanent,

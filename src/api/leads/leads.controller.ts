@@ -12,6 +12,7 @@ import {
   Res,
   InternalServerErrorException,
   Logger,
+  SetMetadata,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { LeadsService } from './leads.service';
@@ -111,9 +112,10 @@ export class LeadsController {
   }
 
   @Get(':id/application-form/pdf')
+  @SetMetadata('keep-raw-response', true)
   async getApplicationFormPdf(@Param('id') id: string, @Res() res: Response) {
     try {
-      const buffer = await this.leadsService.generateApplicationPdf(id);
+      const buffer = await this.leadsService.getApplicationFormPdf(id);
 
       if (!buffer || buffer.length === 0) {
         throw new InternalServerErrorException(
@@ -121,13 +123,14 @@ export class LeadsController {
         );
       }
 
-      res.set({
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename=application-form-${id}.pdf`,
-        'Content-Length': buffer.length,
-      });
+      res.header('Content-Type', 'application/pdf');
+      res.header(
+        'Content-Disposition',
+        `attachment; filename="application-form-${id}.pdf"`,
+      );
+      res.header('Content-Length', buffer.length.toString());
 
-      res.end(buffer);
+      res.status(200).send(buffer);
     } catch (error) {
       this.logger.error(
         `Controller PDF handling error: ${error instanceof Error ? error.message : 'Unknown error'}`,
