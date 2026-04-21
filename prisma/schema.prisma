@@ -210,8 +210,3 @@ model Branch {
   @@map("branches")
 }
 
-model DemoTable {
-  id        String   @id @default(uuid())
-  name      String
-  createdAt DateTime @default(now())
-}
