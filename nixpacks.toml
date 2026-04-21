@@ -9,7 +9,7 @@ PUPPETEER_EXECUTABLE_PATH = '/usr/bin/chromium'
 # Setup phase - Install system packages
 [phases.setup]
 # Extend default Node.js packages with Chromium and dependencies for Puppeteer/PDF generation
-nixPkgs = ['...', 'chromium', 'nss', 'freetype', 'harfbuzz', 'ca-certificates', 'ttf-freefont']
+nixPkgs = ['...', 'chromium', 'nss', 'freetype', 'harfbuzz', 'cacert']
 
 # Install phase - Install Node dependencies and generate Prisma Client
 [phases.install]
