@@ -5,7 +5,22 @@ import {
   IsEnum,
   IsDateString,
 } from 'class-validator';
-import { LeadStatus } from '@prisma/client';
+export enum LeadStatus {
+  NEW = 'NEW',
+  FOLLOW_UP = 'FOLLOW_UP',
+  COMPLETED = 'COMPLETED',
+  NOT_INTERESTED = 'NOT_INTERESTED',
+  NO_ANSWER = 'NO_ANSWER',
+  CLOSED = 'CLOSED',
+  INVALID_WRONG = 'INVALID_WRONG',
+  INTERESTED = 'INTERESTED',
+  RECALL = 'RECALL',
+  LOGIN = 'LOGIN',
+  SANCTIONED = 'SANCTIONED',
+  DISBURSEMENT = 'DISBURSEMENT',
+  REJECT = 'REJECT',
+  DORMANT = 'DORMANT',
+}
 
 export class UpdateLeadStatusDto {
   @IsEnum(LeadStatus)
