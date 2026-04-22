@@ -375,8 +375,17 @@ export class LeadsService {
         baseLeadWhere.id = 'none';
       } else {
         const allowedMobileIds = (branchAdmin.mobileIds as string[]) || [];
-        baseLeadWhere.mobileId = { in: allowedMobileIds };
-        baseLeadWhere.OR = [{ assignedToId: user.id }, { assignedToId: null }];
+        baseLeadWhere.AND = [
+          {
+            OR: [
+              { mobileId: { in: allowedMobileIds } },
+              { mobileId: null, branchId: user.branchId },
+            ],
+          },
+          {
+            OR: [{ assignedToId: user.id }, { assignedToId: null }],
+          },
+        ];
       }
     } else if (user?.userType === 'ADMIN') {
       // 1. Get admin's allowed mobile IDs
@@ -384,9 +393,16 @@ export class LeadsService {
         where: { id: user.id },
       });
       const allowedIds = (admin?.mobileIds as string[]) || [];
-      baseLeadWhere.mobileId = { in: allowedIds };
+      baseLeadWhere.AND = [
+        {
+          OR: [
+            { mobileId: { in: allowedIds } },
+            { mobileId: null, branchId: user.branchId },
+          ],
+        },
+      ];
       // For call logs, we want logs related to these leads
-      baseCallWhere.lead = { mobileId: { in: allowedIds } };
+      baseCallWhere.lead = { ...baseLeadWhere };
     }
 
     let totalAdmins = 0;
