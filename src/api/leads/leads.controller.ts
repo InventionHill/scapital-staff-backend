@@ -21,6 +21,7 @@ import {
   AssignLeadDto,
 } from './dto/update-lead-status.dto';
 import { CreateManualLeadDto } from './dto/create-manual-lead.dto';
+import { ImportLeadsDto } from './dto/import-leads.dto';
 import { CreateApplicationFormDto } from './dto/application-form.dto';
 import { AuthGuard } from '@nestjs/passport';
 
@@ -30,6 +31,17 @@ export class LeadsController {
   private readonly logger = new Logger(LeadsController.name);
 
   constructor(private readonly leadsService: LeadsService) {}
+
+  @Post('import')
+  async importLeads(@Request() req, @Body() importLeadsDto: ImportLeadsDto) {
+    this.logger.log(
+      `Lead Import Attempt: ${JSON.stringify({
+        count: importLeadsDto.leads?.length,
+        user: req.user?.userType,
+      })}`,
+    );
+    return this.leadsService.importLeads(importLeadsDto, req.user);
+  }
 
   @Post('manual')
   async createManual(
