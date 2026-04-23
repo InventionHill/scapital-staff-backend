@@ -26,9 +26,9 @@ export class BranchesService {
   async findAll() {
     return this.prisma.branch.findMany({
       include: {
+        admins: { select: { id: true, name: true, email: true } },
         _count: {
           select: {
-            admins: true,
             mobileUsers: true,
             leads: true,
           },
@@ -72,9 +72,9 @@ export class BranchesService {
       const branch = await this.prisma.branch.findUnique({
         where: { id },
         include: {
+          admins: { select: { id: true } },
           _count: {
             select: {
-              admins: true,
               mobileUsers: true,
               leads: true,
             },
@@ -84,8 +84,8 @@ export class BranchesService {
 
       if (!branch) throw new NotFoundException('Branch not found');
 
-      const count = branch._count;
-      if (count.admins > 0 || count.mobileUsers > 0 || count.leads > 0) {
+      const count = (branch as any)._count;
+      if (branch.admins || count.mobileUsers > 0 || count.leads > 0) {
         throw new ConflictException(
           'Cannot delete branch with associated users or leads',
         );
