@@ -134,22 +134,25 @@ export class LeadsService {
 
     for (const leadDto of dto.leads) {
       try {
-        // Check for duplicate phone number
-        const existing = await this.prisma.lead.findUnique({
-          where: { phoneNumber: leadDto.phoneNumber },
-        });
-
-        if (existing) {
-          results.skipped++;
-          continue;
-        }
-
         // Determine branchId
         let branchId: string | null = leadDto.branchId || null;
         if (user?.userType === 'ADMIN' && user?.branchId) {
           branchId = user.branchId;
         } else if (user?.userType === 'SUPER_ADMIN' && leadDto.branchId) {
           branchId = leadDto.branchId;
+        }
+
+        // Check for duplicate phone number within the same branch
+        const existing = await this.prisma.lead.findFirst({
+          where: {
+            phoneNumber: leadDto.phoneNumber,
+            branchId: branchId,
+          },
+        });
+
+        if (existing) {
+          results.skipped++;
+          continue;
         }
 
         await this.prisma.$transaction(async (tx: any) => {
@@ -205,16 +208,6 @@ export class LeadsService {
   }
 
   async createManual(dto: CreateManualLeadDto, user: any) {
-    // Check for duplicate phone number
-    const existing = await this.prisma.lead.findUnique({
-      where: { phoneNumber: dto.phoneNumber },
-    });
-    if (existing) {
-      throw new ConflictException(
-        'A lead with this phone number already exists',
-      );
-    }
-
     // Determine branchId from user context or DTO
     let branchId: string | null = dto.branchId || null;
     if (user?.userType === 'ADMIN' && user?.branchId) {
@@ -223,6 +216,19 @@ export class LeadsService {
       branchId = user.branchId;
     } else if (user?.userType === 'SUPER_ADMIN' && dto.branchId) {
       branchId = dto.branchId;
+    }
+
+    // Check for duplicate phone number within the same branch
+    const existing = await this.prisma.lead.findFirst({
+      where: {
+        phoneNumber: dto.phoneNumber,
+        branchId: branchId,
+      },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'A lead with this phone number already exists in this branch',
+      );
     }
 
     // Build the createdAt timestamp from date + time fields

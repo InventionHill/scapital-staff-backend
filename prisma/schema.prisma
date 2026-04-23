@@ -57,7 +57,7 @@ model MobileUser {
 
 model Lead {
   id               String           @id @default(uuid())
-  phoneNumber      String           @unique
+  phoneNumber      String
   name             String?
   status           LeadStatus       @default(NEW)
   assignedToId     String?
@@ -90,6 +90,7 @@ model Lead {
   @@index([loanTypeId], map: "leads_loanTypeId_fkey")
   @@index([mobileId])
   @@index([branchId], map: "leads_branchId_fkey")
+  @@index([phoneNumber])
   @@map("leads")
 }
 
