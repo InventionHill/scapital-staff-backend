@@ -8,18 +8,18 @@ datasource db {
 }
 
 model AdminUser {
-  id           String    @id @default(uuid())
-  email        String    @unique
-  password     String
-  name         String?
-  role         String    @default("ADMIN") // Fixed to ADMIN
-  branchId     String?   @unique // Ensure only one admin per branch
-  branch       Branch?   @relation(fields: [branchId], references: [id])
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  isEnabled    Boolean   @default(true)
-  callLogs     CallLog[]
-  mobileIds    Json?     // Array of strings: ["id1", "id2"]
+  id        String    @id @default(uuid())
+  email     String    @unique
+  password  String
+  name      String?
+  role      String    @default("ADMIN")
+  branchId  String?   @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  isEnabled Boolean   @default(true)
+  mobileIds Json?
+  branch    Branch?   @relation(fields: [branchId], references: [id])
+  callLogs  CallLog[]
 
   @@map("admin_users")
 }
@@ -37,110 +37,105 @@ model SuperAdmin {
 }
 
 model MobileUser {
-  id           String   @id @default(uuid())
+  id           String    @id @default(uuid())
   name         String?
-  username     String   @unique
+  username     String    @unique
   mobileNumber String?
   password     String
-  role         String   @default("USER")
+  role         String    @default("USER")
   branchId     String?
-  branch       Branch?  @relation(fields: [branchId], references: [id])
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  isEnabled    Boolean  @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  isEnabled    Boolean   @default(true)
   callLogs     CallLog[]
   leads        Lead[]
+  branch       Branch?   @relation(fields: [branchId], references: [id])
 
+  @@index([branchId], map: "mobile_users_branchId_fkey")
   @@map("mobile_users")
 }
 
 model Lead {
-  id             String       @id @default(uuid())
-  phoneNumber    String       @unique
-  name           String?
-  status         LeadStatus   @default(NEW)
-  assignedToId   String?
-  lastCallAt     DateTime?
-  statusRemark   String?      @db.Text
-  notes          String?      @db.Text
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  profile        String?      @db.VarChar(50)
-  cibilStatus    String?      @db.VarChar(50)
-  cibilRemark    String?      @db.Text
-  email          String?
-  nextFollowUpAt DateTime?
-  priority       LeadPriority @default(MEDIUM)
-  source         String?
-  loanType       String?      @default("Other")
-  customLoanType String?      @db.Text
-  loanTypeId     String?
-  branchId       String?
-  mobileId       String?      // The incoming mobile ID that generated this lead
-  branch         Branch?       @relation(fields: [branchId], references: [id])
-  serialId       Int?         @unique(map: "serialId") @default(autoincrement())
-  branchSerialId Int?
-  callLogs       CallLog[]
-  assignedTo     MobileUser?   @relation(fields: [assignedToId], references: [id])
-  assignedLoanType LoanType?     @relation(fields: [loanTypeId], references: [id], name: "AssignedLoanType")
+  id               String           @id @default(uuid())
+  phoneNumber      String           @unique
+  name             String?
+  status           LeadStatus       @default(NEW)
+  assignedToId     String?
+  lastCallAt       DateTime?
+  statusRemark     String?          @db.Text
+  notes            String?          @db.Text
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  profile          String?          @db.VarChar(50)
+  cibilStatus      String?          @db.VarChar(50)
+  cibilRemark      String?          @db.Text
+  email            String?
+  nextFollowUpAt   DateTime?
+  priority         LeadPriority     @default(MEDIUM)
+  source           String?
+  loanType         String?          @default("Other")
+  customLoanType   String?          @db.Text
+  loanTypeId       String?
+  branchId         String?
+  mobileId         String?
+  serialId         Int              @unique(map: "serialId") @default(autoincrement())
+  branchSerialId   Int?
+  applicationForm  ApplicationForm?
+  callLogs         CallLog[]
+  assignedTo       MobileUser?      @relation(fields: [assignedToId], references: [id])
+  branch           Branch?          @relation(fields: [branchId], references: [id])
+  assignedLoanType LoanType?        @relation("AssignedLoanType", fields: [loanTypeId], references: [id])
 
   @@index([assignedToId], map: "leads_assignedToId_fkey")
   @@index([loanTypeId], map: "leads_loanTypeId_fkey")
   @@index([mobileId])
-  applicationForm ApplicationForm?
+  @@index([branchId], map: "leads_branchId_fkey")
   @@map("leads")
 }
 
 model ApplicationForm {
-  id            String   @id @default(uuid())
-  leadId        String   @unique
-  lead          Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  
-  // Basic info
-  name          String
-  phoneNumber   String
-  email         String?
-  motherName    String?
-  dob           String?
-  companyName   String?
-  fileNumber    String?
-
-  // Nested structures as JSON
-  addresses     Json?    // { current, permanent, office, property }
-  financials    Json?    // { netSalaryInr, loanAmountInr, obligationInr }
-  
-  product       String?
-  residentType  String?
-  leadBy        String?
-
-  references    Json?    // Array of { name, phoneNumber }
-  coApplicants  Json?    // Array of { name, phoneNumber, email, motherName }
-  pdfUrl        String?  @db.Text
-
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String   @id @default(uuid())
+  leadId       String   @unique
+  name         String
+  phoneNumber  String
+  email        String?
+  motherName   String?
+  dob          String?
+  companyName  String?
+  fileNumber   String?
+  addresses    Json?
+  financials   Json?
+  product      String?
+  residentType String?
+  leadBy       String?
+  references   Json?
+  coApplicants Json?
+  pdfUrl       String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
   @@map("application_forms")
 }
 
 model CallLog {
-  id           String   @id @default(uuid())
+  id           String      @id @default(uuid())
   phoneNumber  String
-  duration     Int?     @default(0)
+  duration     Int?        @default(0)
   leadId       String?
-  createdAt    DateTime @default(now())
-  callType     String   @default("INCOMING")
+  createdAt    DateTime    @default(now())
+  callType     String      @default("INCOMING")
   callerId     String?
   adminId      String?
-  notes        String?  @db.Text
+  notes        String?     @db.Text
   outcome      String?
   recordingUrl String?
-  serialId     Int      @unique(map: "serialId") @default(autoincrement())
-  caller       MobileUser? @relation(fields: [callerId], references: [id])
-  admin        AdminUser?  @relation(fields: [adminId], references: [id])
-  lead         Lead?    @relation(fields: [leadId], references: [id])
+  serialId     Int         @unique(map: "serialId") @default(autoincrement())
   mobileId     String?
   mobileName   String?
+  admin        AdminUser?  @relation(fields: [adminId], references: [id])
+  caller       MobileUser? @relation(fields: [callerId], references: [id])
+  lead         Lead?       @relation(fields: [leadId], references: [id])
 
   @@index([callerId], map: "call_logs_callerId_fkey")
   @@index([adminId], map: "call_logs_adminId_fkey")
@@ -149,21 +144,61 @@ model CallLog {
 }
 
 model AuditLog {
-  id          String   @id @default(uuid())
-  actorId     String
-  actorType   String   // "ADMIN" or "SUPER_ADMIN"
-  branchId    String?
-  action      String   // e.g. "CREATE_USER", "UPDATE_LEAD"
-  details     String   @db.Text
-  targetId    String?
-  targetType  String?
-  createdAt   DateTime @default(now())
-  
-  branch      Branch?   @relation(fields: [branchId], references: [id])
+  id         String   @id @default(uuid())
+  actorId    String
+  actorType  String
+  branchId   String?
+  action     String
+  details    String   @db.Text
+  targetId   String?
+  targetType String?
+  createdAt  DateTime @default(now())
+  branch     Branch?  @relation(fields: [branchId], references: [id])
 
   @@index([actorId])
   @@index([branchId])
   @@map("audit_logs")
+}
+
+model LoanType {
+  id        String         @id @default(uuid())
+  name      String
+  createdBy String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  leads     Lead[]         @relation("AssignedLoanType")
+  documents LoanDocument[]
+
+  @@index([createdBy])
+  @@map("loan_types")
+}
+
+model LoanDocument {
+  id          String   @id @default(uuid())
+  name        String
+  description String?  @db.Text
+  loanTypeId  String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  loanType    LoanType @relation(fields: [loanTypeId], references: [id], onDelete: Cascade)
+
+  @@index([loanTypeId], map: "loan_documents_loanTypeId_fkey")
+  @@map("loan_documents")
+}
+
+model Branch {
+  id               String       @id @default(uuid())
+  name             String       @unique
+  location         String?      @db.Text
+  lastSerialNumber Int          @default(0)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  admins           AdminUser?
+  auditLogs        AuditLog[]
+  leads            Lead[]
+  mobileUsers      MobileUser[]
+
+  @@map("branches")
 }
 
 enum LeadStatus {
@@ -188,49 +223,3 @@ enum LeadPriority {
   MEDIUM
   HIGH
 }
-
-enum CibilStatus {
-  ISSUED
-  NOT_ISSUED
-}
-
-model LoanType {
-  id        String         @id @default(uuid())
-  name      String
-  createdBy String?
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
-  documents LoanDocument[]
-  leads     Lead[] @relation("AssignedLoanType")
-
-  @@index([createdBy])
-  @@map("loan_types")
-}
-
-model LoanDocument {
-  id          String   @id @default(uuid())
-  name        String
-  description String?  @db.Text
-  loanTypeId  String
-  loanType    LoanType @relation(fields: [loanTypeId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@map("loan_documents")
-}
-
-model Branch {
-  id               String   @id @default(uuid())
-  name             String   @unique
-  location         String?  @db.Text
-  lastSerialNumber Int      @default(0)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  admins           AdminUser[]
-  mobileUsers      MobileUser[]
-  leads            Lead[]
-  auditLogs        AuditLog[]
-
-  @@map("branches")
-}
-
