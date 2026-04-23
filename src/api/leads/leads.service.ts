@@ -13,6 +13,7 @@ import {
   AssignLeadDto,
 } from './dto/update-lead-status.dto';
 import { CreateManualLeadDto } from './dto/create-manual-lead.dto';
+import { ImportLeadsDto } from './dto/import-leads.dto';
 import { CreateApplicationFormDto } from './dto/application-form.dto';
 import { PdfService } from './pdf.service';
 import { S3Service } from './s3.service';
@@ -122,6 +123,85 @@ export class LeadsService {
 
     // Fallback to generation if not in S3
     return this.generateApplicationPdf(leadId);
+  }
+
+  async importLeads(dto: ImportLeadsDto, user: any) {
+    const results = {
+      imported: 0,
+      skipped: 0,
+      errors: [] as any[],
+    };
+
+    for (const leadDto of dto.leads) {
+      try {
+        // Check for duplicate phone number
+        const existing = await this.prisma.lead.findUnique({
+          where: { phoneNumber: leadDto.phoneNumber },
+        });
+
+        if (existing) {
+          results.skipped++;
+          continue;
+        }
+
+        // Determine branchId
+        let branchId: string | null = leadDto.branchId || null;
+        if (user?.userType === 'ADMIN' && user?.branchId) {
+          branchId = user.branchId;
+        } else if (user?.userType === 'SUPER_ADMIN' && leadDto.branchId) {
+          branchId = leadDto.branchId;
+        }
+
+        await this.prisma.$transaction(async (tx: any) => {
+          // Calculate branch-specific serial ID
+          let branchSerialId = null;
+          if (branchId) {
+            const branch = await tx.branch.update({
+              where: { id: branchId },
+              data: { lastSerialNumber: { increment: 1 } },
+              select: { lastSerialNumber: true },
+            });
+            branchSerialId = branch.lastSerialNumber;
+          }
+
+          // Create the lead
+          await tx.lead.create({
+            data: {
+              phoneNumber: leadDto.phoneNumber,
+              name: leadDto.name || null,
+              status: 'NEW',
+              branchId,
+              branchSerialId,
+              createdAt: new Date(),
+              lastCallAt: new Date(),
+              loanType: 'Other',
+            },
+          });
+        });
+
+        results.imported++;
+      } catch (error) {
+        this.logger.error(
+          `Failed to import lead ${leadDto.phoneNumber}: ${error.message}`,
+        );
+        results.errors.push({
+          phoneNumber: leadDto.phoneNumber,
+          error: error.message,
+        });
+      }
+    }
+
+    if (user) {
+      await this.auditLog.createLog(
+        user.id,
+        user.userType as any,
+        'IMPORT_LEADS',
+        `Imported ${results.imported} leads (Skipped: ${results.skipped}, Errors: ${results.errors.length})`,
+        { targetType: 'LEAD' },
+      );
+    }
+
+    return results;
   }
 
   async createManual(dto: CreateManualLeadDto, user: any) {
