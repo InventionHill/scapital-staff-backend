@@ -13,7 +13,10 @@ import {
   InternalServerErrorException,
   Logger,
   SetMetadata,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { LeadsService } from './leads.service';
 import {
@@ -33,13 +36,27 @@ export class LeadsController {
   constructor(private readonly leadsService: LeadsService) {}
 
   @Post('import')
-  async importLeads(@Request() req, @Body() importLeadsDto: ImportLeadsDto) {
+  @UseInterceptors(FileInterceptor('file'))
+  async importLeads(
+    @Request() req,
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: any,
+  ) {
     this.logger.log(
       `Lead Import Attempt: ${JSON.stringify({
-        count: importLeadsDto.leads?.length,
+        hasFile: !!file,
+        fileName: file?.originalname,
         user: req.user?.userType,
       })}`,
     );
+
+    // If a file is provided, use the file import logic
+    if (file) {
+      return this.leadsService.importLeadsFromFile(file, req.user);
+    }
+
+    // Fallback to JSON array import if no file is provided (for backward compatibility)
+    const importLeadsDto = body as ImportLeadsDto;
     return this.leadsService.importLeads(importLeadsDto, req.user);
   }
 
