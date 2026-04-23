@@ -128,6 +128,8 @@ export class LeadsService {
   async importLeads(dto: ImportLeadsDto, user: any) {
     const results = {
       imported: 0,
+      newLeads: 0,
+      updatedLeads: 0,
       skipped: 0,
       errors: [] as any[],
     };
@@ -151,7 +153,17 @@ export class LeadsService {
         });
 
         if (existing) {
-          results.skipped++;
+          // If duplicate in same branch, update status to RECALL
+          await this.prisma.lead.update({
+            where: { id: existing.id },
+            data: {
+              status: 'RECALL',
+              lastCallAt: new Date(),
+              name: leadDto.name || existing.name, // Update name if provided
+            },
+          });
+          results.imported++;
+          results.updatedLeads++;
           continue;
         }
 
@@ -183,6 +195,7 @@ export class LeadsService {
         });
 
         results.imported++;
+        results.newLeads++;
       } catch (error) {
         this.logger.error(
           `Failed to import lead ${leadDto.phoneNumber}: ${error.message}`,
@@ -225,10 +238,17 @@ export class LeadsService {
         branchId: branchId,
       },
     });
+
     if (existing) {
-      throw new ConflictException(
-        'A lead with this phone number already exists in this branch',
-      );
+      // If duplicate in same branch, update status to RECALL and return
+      return this.prisma.lead.update({
+        where: { id: existing.id },
+        data: {
+          status: 'RECALL',
+          lastCallAt: new Date(),
+          name: dto.name || existing.name,
+        },
+      });
     }
 
     // Build the createdAt timestamp from date + time fields
