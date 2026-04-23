@@ -11,6 +11,7 @@ import { MobileDashboardModule } from './api/mobile-dashboard/mobile-dashboard.m
 import { LoanTypesModule } from './api/loan-types/loan-types.module';
 import { BranchesModule } from './api/branches/branches.module';
 import { DashboardModule } from './api/dashboard/dashboard.module';
+import { AuditLogModule } from './api/audit-logs/audit-logs.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { DashboardModule } from './api/dashboard/dashboard.module';
     LoanTypesModule,
     BranchesModule,
     DashboardModule,
+    AuditLogModule,
   ],
   controllers: [AppController],
   providers: [],

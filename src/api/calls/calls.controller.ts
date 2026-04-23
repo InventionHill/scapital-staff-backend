@@ -32,6 +32,7 @@ export class CallsController {
     @Query('assignedToId') assignedToId?: string,
     @Query('search') search?: string,
     @Query('status') status?: string,
+    @Query('adminId') adminId?: string,
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
   ) {
@@ -44,6 +45,7 @@ export class CallsController {
       status,
       page,
       limit,
+      adminId,
     );
   }
 
@@ -56,7 +58,7 @@ export class CallsController {
     @Query('endDate') endDate?: string,
     @Query('assignedToId') assignedToId?: string,
     @Query('search') search?: string,
-    @Query('status') status?: string,
+    @Query('adminId') adminId?: string,
   ) {
     const buffer = await this.callsService.exportCallLogs(
       req.user,
@@ -65,6 +67,7 @@ export class CallsController {
       assignedToId,
       search,
       status,
+      adminId,
     );
 
     res.set({

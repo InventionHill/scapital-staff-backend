@@ -109,4 +109,32 @@ export class AuthController {
   async remove(@Param('id') id: string) {
     return this.authService.remove(id);
   }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN')
+  @Get('admins/:id/mobile-users')
+  async getAdminMobileUsers(@Param('id') id: string) {
+    return this.authService.getAdminMobileUsers(id);
+  }
+
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles('SUPER_ADMIN')
+  @Patch('admins/:id/status')
+  async toggleAdminStatus(
+    @Param('id') id: string,
+    @Body('isEnabled') isEnabled: boolean,
+    @Request() req: any,
+  ) {
+    return this.authService.toggleAdminStatus(id, isEnabled, req.user);
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @Patch('users/:id/status')
+  async toggleMobileUserStatus(
+    @Param('id') id: string,
+    @Body('isEnabled') isEnabled: boolean,
+    @Request() req: any,
+  ) {
+    return this.authService.toggleMobileUserStatus(id, isEnabled, req.user);
+  }
 }

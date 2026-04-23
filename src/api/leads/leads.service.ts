@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AuditLogService } from '../audit-logs/audit-logs.service';
 import {
   UpdateLeadStatusDto,
   AssignLeadDto,
@@ -26,6 +27,7 @@ export class LeadsService {
     private pdfService: PdfService,
     private configService: ConfigService,
     private s3Service: S3Service,
+    private auditLog: AuditLogService,
   ) {
     this.prisma = prisma;
   }
@@ -69,9 +71,11 @@ export class LeadsService {
     const formatted: any = {
       ...lead,
       customLoanType,
-      leadId: lead.serialId
-        ? `LD-${String(lead.serialId).padStart(5, '0')}`
-        : null,
+      leadId: lead.branchSerialId
+        ? `LD-${String(lead.branchSerialId).padStart(5, '0')}`
+        : lead.serialId
+          ? `LD-${String(lead.serialId).padStart(5, '0')}`
+          : null,
       displayIcon,
       displayStatusText,
       name: lead.name || '',
@@ -131,14 +135,14 @@ export class LeadsService {
       );
     }
 
-    // Determine branchId from user context
-    let branchId: string | null = null;
+    // Determine branchId from user context or DTO
+    let branchId: string | null = dto.branchId || null;
     if (user?.userType === 'ADMIN' && user?.branchId) {
       branchId = user.branchId;
     } else if (user?.userType === 'MOBILE' && user?.branchId) {
       branchId = user.branchId;
-    } else if (user?.userType === 'SUPER_ADMIN') {
-      branchId = null; // Super Admin creates without branch
+    } else if (user?.userType === 'SUPER_ADMIN' && dto.branchId) {
+      branchId = dto.branchId;
     }
 
     // Build the createdAt timestamp from date + time fields
@@ -152,34 +156,59 @@ export class LeadsService {
       }
     }
 
-    const lead = await this.prisma.lead.create({
-      data: {
-        phoneNumber: dto.phoneNumber,
-        name: dto.name || null,
-        status: 'NEW',
-        branchId,
-        assignedToId:
-          user?.userType === 'MOBILE'
-            ? user.id
-            : dto.assignedToId === 'unassigned' || dto.assignedToId === ''
+    const lead = await this.prisma.$transaction(async (tx: any) => {
+      // 1. Calculate branch-specific serial ID using branch counter
+      let branchSerialId = null;
+      if (branchId) {
+        const branch = await tx.branch.update({
+          where: { id: branchId },
+          data: { lastSerialNumber: { increment: 1 } },
+          select: { lastSerialNumber: true },
+        });
+        branchSerialId = branch.lastSerialNumber;
+      }
+
+      // 2. Create the lead
+      return tx.lead.create({
+        data: {
+          phoneNumber: dto.phoneNumber,
+          name: dto.name || null,
+          status: 'NEW',
+          branchId,
+          branchSerialId,
+          assignedToId:
+            user?.userType === 'MOBILE'
+              ? user.id
+              : dto.assignedToId === 'unassigned' || dto.assignedToId === ''
+                ? null
+                : dto.assignedToId || null,
+          createdAt: createdAt || new Date(),
+          lastCallAt: createdAt || new Date(),
+          loanType: dto.loanType || 'Other',
+          customLoanType: dto.loanType === 'Other' ? dto.customLoanType : null,
+          loanTypeId:
+            dto.loanTypeId === 'unassigned' || dto.loanTypeId === ''
               ? null
-              : dto.assignedToId || null,
-        createdAt: createdAt || new Date(),
-        lastCallAt: createdAt || new Date(),
-        loanType: dto.loanType || 'Other',
-        customLoanType: dto.loanType === 'Other' ? dto.customLoanType : null,
-        loanTypeId:
-          dto.loanTypeId === 'unassigned' || dto.loanTypeId === ''
-            ? null
-            : dto.loanTypeId || null,
-      },
-      include: {
-        assignedTo: { select: { id: true, name: true, username: true } },
-        assignedLoanType: true,
-        _count: { select: { callLogs: true } },
-        applicationForm: { select: { id: true, pdfUrl: true } } as any,
-      },
+              : dto.loanTypeId || null,
+        },
+        include: {
+          assignedTo: { select: { id: true, name: true, username: true } },
+          assignedLoanType: true,
+          _count: { select: { callLogs: true } },
+          applicationForm: { select: { id: true, pdfUrl: true } } as any,
+        },
+      });
     });
+
+    if (user) {
+      await this.auditLog.createLog(
+        user.id,
+        user.userType as any,
+        'CREATE_MANUAL_LEAD',
+        `Created Manual Lead: ${lead.name || 'N/A'} (${lead.phoneNumber})`,
+        { targetId: lead.id, targetType: 'LEAD', branchId: lead.branchId },
+      );
+    }
 
     return await this.formatLead(lead, user);
   }
@@ -329,6 +358,10 @@ export class LeadsService {
           applicationForm: { select: { id: true, pdfUrl: true } } as any,
         },
       });
+
+      // NOTE: No AuditLog here — the CallLog created below (lines 363+)
+      // already records who performed the action (adminId/callerId), so
+      // adding an AuditLog would create a duplicate in the unified feed.
     } catch (error) {
       if (error.code === 'P2002') {
         throw new ConflictException(
@@ -388,19 +421,8 @@ export class LeadsService {
         ];
       }
     } else if (user?.userType === 'ADMIN') {
-      // 1. Get admin's allowed mobile IDs
-      const admin = await this.prisma.adminUser.findUnique({
-        where: { id: user.id },
-      });
-      const allowedIds = (admin?.mobileIds as string[]) || [];
-      baseLeadWhere.AND = [
-        {
-          OR: [
-            { mobileId: { in: allowedIds } },
-            { mobileId: null, branchId: user.branchId },
-          ],
-        },
-      ];
+      // 1. Filter by branch (broadened visibility)
+      baseLeadWhere.branchId = user.branchId;
       // For call logs, we want logs related to these leads
       baseCallWhere.lead = { ...baseLeadWhere };
     }
@@ -490,7 +512,7 @@ export class LeadsService {
     };
   }
 
-  async assign(id: string, dto: AssignLeadDto) {
+  async assign(id: string, dto: AssignLeadDto, user?: any) {
     const lead = await this.prisma.lead.findUnique({ where: { id } });
     if (!lead) throw new NotFoundException('Lead not found');
 
@@ -514,6 +536,17 @@ export class LeadsService {
         },
       },
     });
+
+    if (user) {
+      const assigneeName = updatedLead.assignedTo?.name || 'Unassigned';
+      await this.auditLog.createLog(
+        user.id,
+        user.userType as any,
+        'ASSIGN_LEAD',
+        `Assigned Lead: ${lead.name || lead.phoneNumber} to ${assigneeName}`,
+        { targetId: id, targetType: 'LEAD', branchId: lead.branchId },
+      );
+    }
 
     return await this.formatLead(
       updatedLead,
@@ -564,22 +597,18 @@ export class LeadsService {
         ];
       }
     } else if (user?.userType === 'ADMIN' && user.role === 'ADMIN') {
-      // 1. Get admin's allowed mobile IDs
-      const admin = await this.prisma.adminUser.findUnique({
-        where: { id: user.id },
-      });
-      const allowedIds = (admin?.mobileIds as string[]) || [];
-      where.AND = [
-        ...(where.AND || []),
-        {
-          OR: [
-            { mobileId: { in: allowedIds } },
-            { mobileId: null, branchId: user.branchId },
-          ],
-        },
-      ];
+      // 1. Filter by branch (broadened visibility)
+      where.branchId = user.branchId;
     }
-    // SUPER_ADMIN sees everything unless they explicitly filter by branchId query
+    // SUPER_ADMIN sees everything unless they explicitly filter by branchId or assignedToId query
+
+    if (assignedToId) {
+      if (assignedToId === 'unassigned') {
+        where.assignedToId = null;
+      } else {
+        where.assignedToId = assignedToId;
+      }
+    }
 
     if (startDate || endDate) {
       where.createdAt = {};
@@ -709,7 +738,19 @@ export class LeadsService {
     // Delete associated call logs first
     await this.prisma.callLog.deleteMany({ where: { leadId: id } });
 
-    return this.prisma.lead.delete({ where: { id } });
+    const res = await this.prisma.lead.delete({ where: { id } });
+
+    if (user) {
+      await this.auditLog.createLog(
+        user.id,
+        user.userType as any,
+        'DELETE_LEAD',
+        `Deleted Lead: ${lead.name || lead.phoneNumber}`,
+        { targetId: id, targetType: 'LEAD', branchId: lead.branchId },
+      );
+    }
+
+    return res;
   }
 
   async getApplicationForm(leadId: string) {
@@ -734,7 +775,11 @@ export class LeadsService {
     return form;
   }
 
-  async updateApplicationForm(leadId: string, dto: CreateApplicationFormDto) {
+  async updateApplicationForm(
+    leadId: string,
+    dto: CreateApplicationFormDto,
+    user?: any,
+  ) {
     const lead = await this.prisma.lead.findUnique({ where: { id: leadId } });
     if (!lead) throw new NotFoundException('Lead not found');
 
@@ -753,6 +798,16 @@ export class LeadsService {
         leadId,
       },
     });
+
+    if (user) {
+      await this.auditLog.createLog(
+        user.id,
+        user.userType as any,
+        'SAVE_APPLICATION_FORM',
+        `Saved Application Form for Lead: ${lead.name || lead.phoneNumber}`,
+        { targetId: leadId, targetType: 'LEAD', branchId: lead.branchId },
+      );
+    }
 
     // 🚀 NEW: Generate and Upload PDF to S3 in the background or immediately
     try {

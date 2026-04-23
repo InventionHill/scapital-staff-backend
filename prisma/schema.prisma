@@ -17,6 +17,7 @@ model AdminUser {
   branch       Branch?   @relation(fields: [branchId], references: [id])
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
+  isEnabled    Boolean   @default(true)
   callLogs     CallLog[]
   mobileIds    Json?     // Array of strings: ["id1", "id2"]
 
@@ -46,6 +47,7 @@ model MobileUser {
   branch       Branch?  @relation(fields: [branchId], references: [id])
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  isEnabled    Boolean  @default(true)
   callLogs     CallLog[]
   leads        Lead[]
 
@@ -77,6 +79,7 @@ model Lead {
   mobileId       String?      // The incoming mobile ID that generated this lead
   branch         Branch?       @relation(fields: [branchId], references: [id])
   serialId       Int?         @unique(map: "serialId") @default(autoincrement())
+  branchSerialId Int?
   callLogs       CallLog[]
   assignedTo     MobileUser?   @relation(fields: [assignedToId], references: [id])
   assignedLoanType LoanType?     @relation(fields: [loanTypeId], references: [id], name: "AssignedLoanType")
@@ -145,6 +148,24 @@ model CallLog {
   @@map("call_logs")
 }
 
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorId     String
+  actorType   String   // "ADMIN" or "SUPER_ADMIN"
+  branchId    String?
+  action      String   // e.g. "CREATE_USER", "UPDATE_LEAD"
+  details     String   @db.Text
+  targetId    String?
+  targetType  String?
+  createdAt   DateTime @default(now())
+  
+  branch      Branch?   @relation(fields: [branchId], references: [id])
+
+  @@index([actorId])
+  @@index([branchId])
+  @@map("audit_logs")
+}
+
 enum LeadStatus {
   NEW
   FOLLOW_UP
@@ -199,14 +220,16 @@ model LoanDocument {
 }
 
 model Branch {
-  id          String   @id @default(uuid())
-  name        String   @unique
-  location    String?  @db.Text
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  admins      AdminUser[]
-  mobileUsers MobileUser[]
-  leads       Lead[]
+  id               String   @id @default(uuid())
+  name             String   @unique
+  location         String?  @db.Text
+  lastSerialNumber Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  admins           AdminUser[]
+  mobileUsers      MobileUser[]
+  leads            Lead[]
+  auditLogs        AuditLog[]
 
   @@map("branches")
 }
