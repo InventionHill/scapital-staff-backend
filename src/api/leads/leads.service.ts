@@ -128,28 +128,43 @@ export class LeadsService {
   async importLeads(dto: ImportLeadsDto, user: any) {
     const results = {
       imported: 0,
+      newLeads: 0,
+      updatedLeads: 0,
       skipped: 0,
       errors: [] as any[],
     };
 
     for (const leadDto of dto.leads) {
       try {
-        // Check for duplicate phone number
-        const existing = await this.prisma.lead.findUnique({
-          where: { phoneNumber: leadDto.phoneNumber },
-        });
-
-        if (existing) {
-          results.skipped++;
-          continue;
-        }
-
         // Determine branchId
         let branchId: string | null = leadDto.branchId || null;
         if (user?.userType === 'ADMIN' && user?.branchId) {
           branchId = user.branchId;
         } else if (user?.userType === 'SUPER_ADMIN' && leadDto.branchId) {
           branchId = leadDto.branchId;
+        }
+
+        // Check for duplicate phone number within the same branch
+        const existing = await this.prisma.lead.findFirst({
+          where: {
+            phoneNumber: leadDto.phoneNumber,
+            branchId: branchId,
+          },
+        });
+
+        if (existing) {
+          // If duplicate in same branch, update status to RECALL
+          await this.prisma.lead.update({
+            where: { id: existing.id },
+            data: {
+              status: 'RECALL',
+              lastCallAt: new Date(),
+              name: leadDto.name || existing.name, // Update name if provided
+            },
+          });
+          results.imported++;
+          results.updatedLeads++;
+          continue;
         }
 
         await this.prisma.$transaction(async (tx: any) => {
@@ -180,6 +195,7 @@ export class LeadsService {
         });
 
         results.imported++;
+        results.newLeads++;
       } catch (error) {
         this.logger.error(
           `Failed to import lead ${leadDto.phoneNumber}: ${error.message}`,
@@ -205,16 +221,6 @@ export class LeadsService {
   }
 
   async createManual(dto: CreateManualLeadDto, user: any) {
-    // Check for duplicate phone number
-    const existing = await this.prisma.lead.findUnique({
-      where: { phoneNumber: dto.phoneNumber },
-    });
-    if (existing) {
-      throw new ConflictException(
-        'A lead with this phone number already exists',
-      );
-    }
-
     // Determine branchId from user context or DTO
     let branchId: string | null = dto.branchId || null;
     if (user?.userType === 'ADMIN' && user?.branchId) {
@@ -223,6 +229,26 @@ export class LeadsService {
       branchId = user.branchId;
     } else if (user?.userType === 'SUPER_ADMIN' && dto.branchId) {
       branchId = dto.branchId;
+    }
+
+    // Check for duplicate phone number within the same branch
+    const existing = await this.prisma.lead.findFirst({
+      where: {
+        phoneNumber: dto.phoneNumber,
+        branchId: branchId,
+      },
+    });
+
+    if (existing) {
+      // If duplicate in same branch, update status to RECALL and return
+      return this.prisma.lead.update({
+        where: { id: existing.id },
+        data: {
+          status: 'RECALL',
+          lastCallAt: new Date(),
+          name: dto.name || existing.name,
+        },
+      });
     }
 
     // Build the createdAt timestamp from date + time fields

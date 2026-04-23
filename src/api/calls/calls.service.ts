@@ -46,8 +46,11 @@ export class CallsService {
     }
 
     // 1. Find or create lead
-    let lead = await this.prisma.lead.findUnique({
-      where: { phoneNumber: dto.phoneNumber },
+    let lead = await this.prisma.lead.findFirst({
+      where: {
+        phoneNumber: dto.phoneNumber,
+        branchId: identifiedBranchId,
+      },
     });
 
     if (!lead) {
