@@ -5,6 +5,8 @@ import {
   ForbiddenException,
   Logger,
 } from '@nestjs/common';
+import { Readable } from 'stream';
+import * as ExcelJS from 'exceljs';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogService } from '../audit-logs/audit-logs.service';
@@ -125,7 +127,82 @@ export class LeadsService {
     return this.generateApplicationPdf(leadId);
   }
 
+  async importLeadsFromFile(file: Express.Multer.File, user: any) {
+    if (
+      user?.userType === 'MOBILE' &&
+      user?.role?.toUpperCase() !== 'MANAGER'
+    ) {
+      throw new ForbiddenException(
+        'Permission Denied: Only Managers can import leads.',
+      );
+    }
+
+    try {
+      const workbook = new ExcelJS.Workbook();
+      const fileName = file.originalname || 'import.xlsx';
+      const extension = fileName.split('.').pop()?.toLowerCase();
+
+      if (extension === 'csv') {
+        const stream = Readable.from(file.buffer);
+        await workbook.csv.read(stream);
+      } else {
+        await workbook.xlsx.load(file.buffer as any);
+      }
+
+      const worksheet = workbook.getWorksheet(1) || workbook.worksheets[0];
+      const leads: any[] = [];
+
+      if (!worksheet) {
+        throw new Error('No worksheet found in the file');
+      }
+
+      // Assume first row is header
+      worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber > 1) {
+          // Try to get values from columns
+          // phoneNumber: column 1, name: column 2
+          const phoneNumber = row.getCell(1).value?.toString() || '';
+          const name = row.getCell(2).value?.toString() || '';
+
+          if (phoneNumber) {
+            leads.push({
+              phoneNumber: phoneNumber.trim(),
+              name: name.toString().trim(),
+            });
+          }
+        }
+      });
+
+      if (leads.length === 0) {
+        return {
+          message: 'No leads found in the file. Please check the format.',
+          data: { imported: 0 },
+        };
+      }
+
+      const result = await this.importLeads({ leads }, user);
+      return {
+        message: `Successfully processed file. ${result.newLeads} new leads imported.`,
+        data: result,
+      };
+    } catch (error) {
+      this.logger.error(`Error parsing lead file: ${error.message}`);
+      throw new ConflictException(
+        `Failed to parse file: ${error.message}. Please ensure it is a valid XLSX or CSV.`,
+      );
+    }
+  }
+
   async importLeads(dto: ImportLeadsDto, user: any) {
+    if (
+      user?.userType === 'MOBILE' &&
+      user?.role?.toUpperCase() !== 'MANAGER'
+    ) {
+      throw new ForbiddenException(
+        'Permission Denied: Only Managers can import leads.',
+      );
+    }
+
     const results = {
       imported: 0,
       newLeads: 0,
@@ -133,12 +210,14 @@ export class LeadsService {
       skipped: 0,
       errors: [] as any[],
     };
-
     for (const leadDto of dto.leads) {
       try {
         // Determine branchId
         let branchId: string | null = leadDto.branchId || null;
-        if (user?.userType === 'ADMIN' && user?.branchId) {
+        if (
+          (user?.userType === 'ADMIN' || user?.userType === 'MOBILE') &&
+          user?.branchId
+        ) {
           branchId = user.branchId;
         } else if (user?.userType === 'SUPER_ADMIN' && leadDto.branchId) {
           branchId = leadDto.branchId;

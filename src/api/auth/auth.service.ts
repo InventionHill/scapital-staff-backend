@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   ConflictException,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -13,6 +14,7 @@ import * as bcrypt from 'bcryptjs';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
@@ -136,6 +138,11 @@ export class AuthService {
         branchId: user.branchId,
         branchName: user.branch?.name || 'N/A',
         isEnabled: user.isEnabled,
+        role: user.role || 'USER',
+        accessType:
+          (user.role || 'USER').toUpperCase() === 'MANAGER'
+            ? 'Manager'
+            : 'User',
       },
     };
   }
@@ -236,6 +243,18 @@ export class AuthService {
         },
       });
 
+      // SYNC: Ensure all mobile users in mobileIds are actually in this branch
+      if (dto.mobileIds && dto.mobileIds.length > 0 && branchId) {
+        await this.prisma.mobileUser.updateMany({
+          where: {
+            id: { in: dto.mobileIds },
+          },
+          data: {
+            branchId: branchId,
+          },
+        });
+      }
+
       await this.auditLog.createLog(
         'SYSTEM',
         'SUPER_ADMIN',
@@ -306,19 +325,46 @@ export class AuthService {
   }
 
   async updateAdmin(id: string, data: any) {
-    // Find or create branch by name if provided
-    let branchId = data.branchId;
-    if (!branchId && data.branchName) {
-      const branch = await this.prisma.branch.upsert({
-        where: { name: data.branchName },
-        update: {},
-        create: { name: data.branchName },
-      });
-      branchId = branch.id;
+    // Get existing admin to understand current state
+    const existingAdmin = await this.prisma.adminUser.findUnique({
+      where: { id },
+      include: { branch: true },
+    });
+
+    if (!existingAdmin) {
+      throw new NotFoundException('Admin not found');
     }
 
-    // Check for branch uniqueness (excluding current user)
-    if (branchId) {
+    const oldBranchId = existingAdmin.branchId;
+    let branchId = data.branchId || existingAdmin.branchId;
+
+    // Handle branch update/rename
+    if (data.branchName && data.branchName !== existingAdmin.branch?.name) {
+      const nameExists = await this.prisma.branch.findUnique({
+        where: { name: data.branchName },
+      });
+
+      if (nameExists) {
+        // If name already exists, move the admin to that branch instead of renaming
+        branchId = nameExists.id;
+      } else if (existingAdmin.branchId) {
+        // Rename existing branch record - this reflects for all users already in this branch
+        const updatedBranch = await this.prisma.branch.update({
+          where: { id: existingAdmin.branchId },
+          data: { name: data.branchName },
+        });
+        branchId = updatedBranch.id;
+      } else {
+        // Create new branch if admin didn't have one
+        const branch = await this.prisma.branch.create({
+          data: { name: data.branchName },
+        });
+        branchId = branch.id;
+      }
+    }
+
+    // Check for branch uniqueness (excluding current user) if branchId changed
+    if (branchId && branchId !== existingAdmin.branchId) {
       const existingInBranch = await this.prisma.adminUser.findFirst({
         where: { branchId, id: { not: id } },
       });
@@ -365,6 +411,50 @@ export class AuthService {
       data: updateData,
       include: { branch: true },
     });
+
+    // CRITICAL SYNC: Ensure all mobile users in mobileIds are actually in this branch
+    if (data.mobileIds && data.mobileIds.length > 0 && branchId) {
+      await this.prisma.mobileUser.updateMany({
+        where: {
+          id: { in: data.mobileIds },
+          branchId: { not: branchId },
+        },
+        data: {
+          branchId: branchId,
+        },
+      });
+    }
+
+    // ORPHAN CLEANUP: If the admin moved to a different branch, check if the old one is empty and delete it
+    if (oldBranchId && oldBranchId !== branchId) {
+      const oldBranch = await this.prisma.branch.findUnique({
+        where: { id: oldBranchId },
+        include: {
+          admins: true,
+          _count: {
+            select: { mobileUsers: true, leads: true },
+          },
+        },
+      });
+
+      // If the old branch has no admin, no mobile users, and no leads, delete it to keep UI clean
+      if (
+        oldBranch &&
+        !oldBranch.admins &&
+        oldBranch._count.mobileUsers === 0 &&
+        oldBranch._count.leads === 0
+      ) {
+        await this.prisma.branch
+          .delete({
+            where: { id: oldBranchId },
+          })
+          .catch((err) =>
+            this.logger.error(
+              `Failed to cleanup orphan branch: ${err.message}`,
+            ),
+          );
+      }
+    }
 
     await this.auditLog.createLog(
       'SYSTEM',
@@ -509,12 +599,12 @@ export class AuthService {
         throw new ConflictException('Username is already taken');
     }
 
-    const updateData: any = {
-      name: data.name,
-      username: data.username,
-      mobileNumber: data.mobileNumber,
-      role: data.role,
-    };
+    const updateData: any = {};
+    if (data.name !== undefined) updateData.name = data.name;
+    if (data.username !== undefined) updateData.username = data.username;
+    if (data.mobileNumber !== undefined)
+      updateData.mobileNumber = data.mobileNumber;
+    if (data.role !== undefined) updateData.role = data.role;
 
     if (data.password) {
       updateData.password = await bcrypt.hash(data.password, 10);
@@ -625,6 +715,8 @@ export class AuthService {
           totalFollowUps: followUpsCount,
           totalNewLeads: newLeadsCount,
           totalClosedLeads: closedLeadsCount,
+          role: user.role,
+          isEnabled: user.isEnabled,
         };
       }),
     );
