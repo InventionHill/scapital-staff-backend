@@ -57,6 +57,7 @@ export class LeadsController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('assignedToId') assignedToId?: string,
+    @Query('branchId') branchId?: string,
   ) {
     return this.leadsService.findAll(
       req.user,
@@ -64,6 +65,7 @@ export class LeadsController {
       startDate,
       endDate,
       assignedToId,
+      branchId,
     );
   }
 
@@ -87,8 +89,12 @@ export class LeadsController {
   }
 
   @Patch(':id/assign')
-  async assign(@Param('id') id: string, @Body() assignLeadDto: AssignLeadDto) {
-    return this.leadsService.assign(id, assignLeadDto);
+  async assign(
+    @Request() req,
+    @Param('id') id: string,
+    @Body() assignLeadDto: AssignLeadDto,
+  ) {
+    return this.leadsService.assign(id, assignLeadDto, req.user);
   }
 
   @Delete(':id')
@@ -103,12 +109,13 @@ export class LeadsController {
 
   @Post(':id/application-form')
   async updateApplicationForm(
+    @Request() req,
     @Param('id') id: string,
     @Body() dto: CreateApplicationFormDto,
   ) {
     this.logger.log(`UPDATING FORM - ID: ${id}`);
     this.logger.log(`UPDATING FORM - DTO: ${JSON.stringify(dto, null, 2)}`);
-    return this.leadsService.updateApplicationForm(id, dto);
+    return this.leadsService.updateApplicationForm(id, dto, req.user);
   }
 
   @Get(':id/application-form/pdf')

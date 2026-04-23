@@ -99,9 +99,11 @@ export class MobileDashboardService {
     // Format leads for display
     const followUpTasks = rawFollowUpTasks.map((lead) => ({
       id: lead.id,
-      leadId: lead.serialId
-        ? `LD-${String(lead.serialId).padStart(5, '0')}`
-        : '----',
+      leadId: lead.branchSerialId
+        ? `LD-${String(lead.branchSerialId).padStart(5, '0')}`
+        : lead.serialId
+          ? `LD-${String(lead.serialId).padStart(5, '0')}`
+          : '----',
       name: lead.name || 'Anonymous Lead',
       phoneNumber: lead.phoneNumber,
       nextFollowUpAt: lead.nextFollowUpAt,

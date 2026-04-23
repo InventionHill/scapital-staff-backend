@@ -2,9 +2,11 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AuditLogService } from '../audit-logs/audit-logs.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import * as bcrypt from 'bcryptjs';
@@ -14,6 +16,7 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
+    private auditLog: AuditLogService,
   ) {}
 
   async validateUser(email: string, pass: string): Promise<any> {
@@ -37,6 +40,11 @@ export class AuthService {
       include: { branch: true },
     });
     if (admin && (await bcrypt.compare(pass, admin.password))) {
+      if (!admin.isEnabled) {
+        throw new UnauthorizedException(
+          'Your account has been disabled. Please contact support.',
+        );
+      }
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { password, ...result } = admin;
       return {
@@ -44,6 +52,7 @@ export class AuthService {
         userType: 'ADMIN',
         role: result.role || 'ADMIN',
         branchName: admin.branch?.name || 'N/A',
+        isEnabled: admin.isEnabled,
       };
     }
 
@@ -61,8 +70,19 @@ export class AuthService {
       role: user.role, // "SUPER_ADMIN" or "ADMIN"
       userType: user.userType,
     };
+    const token = this.jwtService.sign(payload);
+
+    // Log the login event
+    await this.auditLog.createLog(
+      user.id,
+      user.userType as any,
+      'LOGIN',
+      `${user.userType.replace('_', ' ')} logged in: ${user.name} (${user.email})`,
+      { branchId: (user as any).branchId },
+    );
+
     return {
-      access_token: this.jwtService.sign(payload),
+      access_token: token,
       user,
     };
   }
@@ -79,6 +99,12 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    if (!user.isEnabled) {
+      throw new UnauthorizedException(
+        'Your account has been disabled. Please contact support.',
+      );
+    }
+
     // Generate token for mobile user
     const payload = {
       sub: user.id,
@@ -88,6 +114,15 @@ export class AuthService {
     };
 
     const token = this.jwtService.sign(payload);
+
+    // Log the login event
+    await this.auditLog.createLog(
+      user.id,
+      'MOBILE',
+      'LOGIN',
+      `Mobile user logged in: ${user.name} (${user.mobileNumber})`,
+      { branchId: user.branchId },
+    );
 
     return {
       sub_token: token,
@@ -100,6 +135,7 @@ export class AuthService {
         userType: 'MOBILE',
         branchId: user.branchId,
         branchName: user.branch?.name || 'N/A',
+        isEnabled: user.isEnabled,
       },
     };
   }
@@ -200,6 +236,18 @@ export class AuthService {
         },
       });
 
+      await this.auditLog.createLog(
+        'SYSTEM',
+        'SUPER_ADMIN',
+        'CREATE_ADMIN',
+        `Created Admin: ${user.name} (${user.email}) for branch ${user.branch?.name || 'N/A'}`,
+        {
+          targetId: user.id,
+          targetType: 'ADMIN_USER',
+          branchId: user.branchId,
+        },
+      );
+
       return {
         id: user.id,
         name: user.name,
@@ -252,6 +300,7 @@ export class AuthService {
         mobileIds: Array.isArray(admin.mobileIds) ? admin.mobileIds : [],
         createdAt: admin.createdAt,
         updatedAt: admin.updatedAt,
+        isEnabled: admin.isEnabled,
       };
     });
   }
@@ -317,6 +366,14 @@ export class AuthService {
       include: { branch: true },
     });
 
+    await this.auditLog.createLog(
+      'SYSTEM',
+      'SUPER_ADMIN',
+      'UPDATE_ADMIN',
+      `Updated Admin: ${user.name} (${user.email})`,
+      { targetId: user.id, targetType: 'ADMIN_USER', branchId: user.branchId },
+    );
+
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { password, ...result } = user;
     return {
@@ -326,9 +383,20 @@ export class AuthService {
   }
 
   async removeAdmin(id: string) {
-    return this.prisma.adminUser.delete({
+    const admin = await this.prisma.adminUser.findUnique({ where: { id } });
+    const res = await this.prisma.adminUser.delete({
       where: { id },
     });
+    if (admin) {
+      await this.auditLog.createLog(
+        'SYSTEM',
+        'SUPER_ADMIN',
+        'DELETE_ADMIN',
+        `Deleted Admin: ${admin.name} (${admin.email})`,
+        { targetId: id, targetType: 'ADMIN_USER', branchId: admin.branchId },
+      );
+    }
+    return res;
   }
 
   async createMobileUser(data: any, creator?: any) {
@@ -357,7 +425,7 @@ export class AuthService {
     }
 
     const hashedPassword = await bcrypt.hash(data.password, 10);
-    return this.prisma.mobileUser.create({
+    const user = await this.prisma.mobileUser.create({
       data: {
         name: data.name,
         username: data.username,
@@ -367,6 +435,22 @@ export class AuthService {
         branchId: branchId,
       },
     });
+
+    if (creator) {
+      await this.auditLog.createLog(
+        creator.id,
+        creator.userType as any,
+        'CREATE_MOBILE_USER',
+        `Created Mobile User: ${user.name || user.username} (${user.mobileNumber || 'N/A'})`,
+        {
+          targetId: user.id,
+          targetType: 'MOBILE_USER',
+          branchId: user.branchId,
+        },
+      );
+    }
+
+    return user;
   }
 
   async findAll(user?: any) {
@@ -393,6 +477,7 @@ export class AuthService {
           },
         },
         createdAt: true,
+        isEnabled: true,
       },
     });
   }
@@ -431,6 +516,10 @@ export class AuthService {
       role: data.role,
     };
 
+    if (data.password) {
+      updateData.password = await bcrypt.hash(data.password, 10);
+    }
+
     // Only allow updating branch if creator is Super Admin or Branch is not set
     if (data.branchId) {
       if (creator?.userType === 'SUPER_ADMIN') {
@@ -438,15 +527,156 @@ export class AuthService {
       }
     }
 
-    return this.prisma.mobileUser.update({
+    const user = await this.prisma.mobileUser.update({
       where: { id },
       data: updateData,
     });
+
+    if (creator) {
+      await this.auditLog.createLog(
+        creator.id,
+        creator.userType as any,
+        'UPDATE_MOBILE_USER',
+        `Updated Mobile User: ${user.name || user.username}`,
+        {
+          targetId: user.id,
+          targetType: 'MOBILE_USER',
+          branchId: user.branchId,
+        },
+      );
+    }
+
+    return user;
   }
 
   async remove(id: string) {
-    return this.prisma.mobileUser.delete({
+    const user = await this.prisma.mobileUser.findUnique({ where: { id } });
+    const res = await this.prisma.mobileUser.delete({
       where: { id },
     });
+    if (user) {
+      await this.auditLog.createLog(
+        'SYSTEM', // We don't have creator here in the method signature, but usually it's the current admin
+        'ADMIN',
+        'DELETE_MOBILE_USER',
+        `Deleted Mobile User: ${user.name || user.username}`,
+        { targetId: id, targetType: 'MOBILE_USER', branchId: user.branchId },
+      );
+    }
+    return res;
+  }
+
+  async getAdminMobileUsers(adminId: string) {
+    const admin = await this.prisma.adminUser.findUnique({
+      where: { id: adminId },
+      include: { branch: true },
+    });
+
+    if (!admin) {
+      throw new NotFoundException('Admin not found');
+    }
+
+    if (!admin.branchId) {
+      return {
+        admin: {
+          id: admin.id,
+          name: admin.name,
+          branchId: admin.branchId,
+          branchName: admin.branch?.name || 'N/A',
+        },
+        mobileUsers: [],
+      };
+    }
+
+    const users = await this.prisma.mobileUser.findMany({
+      where: { branchId: admin.branchId },
+      include: {
+        _count: {
+          select: { leads: true },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    const usersWithStats = await Promise.all(
+      users.map(async (user) => {
+        const [followUpsCount, newLeadsCount, closedLeadsCount] =
+          await Promise.all([
+            this.prisma.lead.count({
+              where: { assignedToId: user.id, status: 'FOLLOW_UP' },
+            }),
+            this.prisma.lead.count({
+              where: { assignedToId: user.id, status: 'NEW' },
+            }),
+            this.prisma.lead.count({
+              where: { assignedToId: user.id, status: 'CLOSED' },
+            }),
+          ]);
+
+        return {
+          id: user.id,
+          name: user.name,
+          username: user.username,
+          mobileNumber: user.mobileNumber,
+          createdAt: user.createdAt,
+          totalLeads: user._count.leads,
+          totalFollowUps: followUpsCount,
+          totalNewLeads: newLeadsCount,
+          totalClosedLeads: closedLeadsCount,
+        };
+      }),
+    );
+
+    return {
+      admin: {
+        id: admin.id,
+        name: admin.name,
+        branchId: admin.branchId,
+        branchName: admin.branch?.name || 'N/A',
+      },
+      mobileUsers: usersWithStats,
+    };
+  }
+
+  async toggleAdminStatus(id: string, isEnabled: boolean, actor: any) {
+    const admin = await this.prisma.adminUser.findUnique({ where: { id } });
+    if (!admin) throw new NotFoundException('Admin not found');
+
+    const updated = await this.prisma.adminUser.update({
+      where: { id },
+      data: { isEnabled },
+    });
+
+    await this.auditLog.createLog(
+      actor.id,
+      actor.userType,
+      isEnabled ? 'ENABLE_ADMIN' : 'DISABLE_ADMIN',
+      `${isEnabled ? 'Enabled' : 'Disabled'} Admin: ${admin.name} (${admin.email})`,
+      { targetId: id, targetType: 'ADMIN_USER', branchId: admin.branchId },
+    );
+
+    return updated;
+  }
+
+  async toggleMobileUserStatus(id: string, isEnabled: boolean, actor: any) {
+    const user = await this.prisma.mobileUser.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('Mobile user not found');
+
+    const updated = await this.prisma.mobileUser.update({
+      where: { id },
+      data: { isEnabled },
+    });
+
+    await this.auditLog.createLog(
+      actor.id,
+      actor.userType,
+      isEnabled ? 'ENABLE_MOBILE_USER' : 'DISABLE_MOBILE_USER',
+      `${isEnabled ? 'Enabled' : 'Disabled'} Mobile User: ${user.name || user.username}`,
+      { targetId: id, targetType: 'MOBILE_USER', branchId: user.branchId },
+    );
+
+    return updated;
   }
 }

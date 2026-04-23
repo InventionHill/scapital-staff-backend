@@ -15,103 +15,82 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: any) {
     const { sub, userType } = payload;
-    let user = null;
+    let foundUser: any = null;
 
     // 1. Try to fetch user based on userType from payload (fast path)
     if (userType === 'SUPER_ADMIN') {
-      user = await this.prisma.superAdmin.findUnique({ where: { id: sub } });
-      if (user) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { password, ...result } = user;
-        return {
-          ...result,
-          userType: 'SUPER_ADMIN',
-          role: result.role || 'SUPER_ADMIN',
-        };
+      foundUser = await this.prisma.superAdmin.findUnique({
+        where: { id: sub },
+      });
+      if (foundUser) {
+        foundUser.userType = 'SUPER_ADMIN';
+        foundUser.role = foundUser.role || 'SUPER_ADMIN';
       }
-    }
-
-    if (userType === 'ADMIN') {
-      user = await this.prisma.adminUser.findUnique({
+    } else if (userType === 'ADMIN') {
+      foundUser = await this.prisma.adminUser.findUnique({
         where: { id: sub },
         include: { branch: true },
       });
-      if (user) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { password, ...result } = user;
-        return {
-          ...result,
-          userType: 'ADMIN',
-          role: result.role || 'ADMIN',
-          branchName: user.branch?.name || 'N/A',
-        };
+      if (foundUser) {
+        foundUser.userType = 'ADMIN';
+        foundUser.role = foundUser.role || 'ADMIN';
+        foundUser.branchName = foundUser.branch?.name || 'N/A';
       }
-    }
-
-    if (userType === 'MOBILE') {
-      user = await this.prisma.mobileUser.findUnique({
+    } else if (userType === 'MOBILE') {
+      foundUser = await this.prisma.mobileUser.findUnique({
         where: { id: sub },
         include: { branch: true },
       });
-      if (user) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { password, ...result } = user;
-        return {
-          ...result,
-          userType: 'MOBILE',
-          role: result.role || 'USER',
-          branchName: user.branch?.name || 'N/A',
-        };
+      if (foundUser) {
+        foundUser.userType = 'MOBILE';
+        foundUser.role = foundUser.role || 'USER';
+        foundUser.branchName = foundUser.branch?.name || 'N/A';
       }
     }
 
     // 2. Sequential fallback search (handles legacy tokens missing userType)
-    // Check SuperAdmin first
-    const superAdmin = await this.prisma.superAdmin.findUnique({
-      where: { id: sub },
-    });
-    if (superAdmin) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { password, ...result } = superAdmin;
-      return {
-        ...result,
-        userType: 'SUPER_ADMIN',
-        role: result.role || 'SUPER_ADMIN',
-      };
+    if (!foundUser) {
+      const superAdmin = await this.prisma.superAdmin.findUnique({
+        where: { id: sub },
+      });
+      if (superAdmin) {
+        foundUser = superAdmin;
+        foundUser.userType = 'SUPER_ADMIN';
+        foundUser.role = foundUser.role || 'SUPER_ADMIN';
+      } else {
+        const admin = await this.prisma.adminUser.findUnique({
+          where: { id: sub },
+          include: { branch: true },
+        });
+        if (admin) {
+          foundUser = admin;
+          foundUser.userType = 'ADMIN';
+          foundUser.role = foundUser.role || 'ADMIN';
+          foundUser.branchName = admin.branch?.name || 'N/A';
+        } else {
+          const mobileUser = await this.prisma.mobileUser.findUnique({
+            where: { id: sub },
+            include: { branch: true },
+          });
+          if (mobileUser) {
+            foundUser = mobileUser;
+            foundUser.userType = 'MOBILE';
+            foundUser.role = mobileUser.role || 'USER';
+            foundUser.branchName = mobileUser.branch?.name || 'N/A';
+          }
+        }
+      }
     }
 
-    // Then check AdminUser
-    const admin = await this.prisma.adminUser.findUnique({
-      where: { id: sub },
-      include: { branch: true },
-    });
-    if (admin) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { password, ...result } = admin;
-      return {
-        ...result,
-        userType: 'ADMIN',
-        role: result.role || 'ADMIN',
-        branchName: admin.branch?.name || 'N/A',
-      };
+    if (!foundUser) return null;
+
+    // Check if account is disabled (for ADMIN and MOBILE users)
+    if (foundUser.isEnabled === false) {
+      return null;
     }
 
-    // Then check MobileUser
-    const mobileUser = await this.prisma.mobileUser.findUnique({
-      where: { id: sub },
-      include: { branch: true },
-    });
-    if (mobileUser) {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { password, ...result } = mobileUser;
-      return {
-        ...result,
-        userType: 'MOBILE',
-        role: result.role || 'USER',
-        branchName: mobileUser.branch?.name || 'N/A',
-      };
-    }
-
-    return null;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { password, ...result } = foundUser;
+    return result;
   }
 }
